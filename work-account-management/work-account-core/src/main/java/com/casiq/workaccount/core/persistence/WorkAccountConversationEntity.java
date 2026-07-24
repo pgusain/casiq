@@ -1,6 +1,7 @@
 package com.casiq.workaccount.core.persistence;
 
 import com.casiq.usermanagement.persistence.TenantEntity;
+import com.casiq.workitem.persistence.WorkItemExecutionEntity;
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.*;
 import java.time.Instant;
@@ -30,5 +31,8 @@ public class WorkAccountConversationEntity extends PanacheEntityBase {
     @Column(name = "payload_json", columnDefinition = "TEXT") public String payloadJson;
     @Column(name = "content_text", columnDefinition = "TEXT") public String contentText;
     @Column(name = "content_html", columnDefinition = "TEXT") public String contentHtml;
+    @Column(name = "outbound_request_id", unique = true) public UUID outboundRequestId;
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "work_item_execution_id")
+    public WorkItemExecutionEntity workItemExecution;
     @Column(name = "received_at", nullable = false) public Instant receivedAt;
 }

@@ -6,6 +6,7 @@ let assignmentWorkItems = [];
 let emailProviders = [];
 let gmailPopup;
 let myWorkPage = 0;
+let activeWorkItemId;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -29,9 +30,19 @@ function show(id) {
 
 function route(user) {
   currentUser = user;
-  $('#account-name').textContent = `${user.companyCode} · ${user.username}`;
+  const displayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username;
+  $('#account-name').textContent = `${user.companyCode} · ${displayName}`;
   if (user.mustChangePassword) { show('forced-password-view'); return; }
-  show('dashboard'); renderProfile(); loadMyWork();
+  show('dashboard');
+  renderProfile();
+  $('#navigate-administration').classList.toggle('hidden', !isAdmin());
+  showWorkspaceScreen('work-items');
+  loadMyWorkTypeOptions()
+    .then(loadMyWork)
+    .catch(cause => {
+      notice(cause.message, true);
+      loadMyWork();
+    });
   if (isAdmin()) {
     $('#admin-panel').classList.remove('hidden'); configureCreateForm(); loadUsers(); loadWorkAccounts(); loadEmailProviders();
     const globalAdmin = currentUser.role === 'GLOBAL_ADMIN';
@@ -48,13 +59,25 @@ function route(user) {
 
 function isAdmin() { return ['GLOBAL_ADMIN', 'ADMIN'].includes(currentUser.role); }
 
+function showWorkspaceScreen(screen) {
+  const administration = screen === 'administration' && isAdmin();
+  $('#work-items-screen').classList.toggle('hidden', administration);
+  $('#administration-screen').classList.toggle('hidden', !administration);
+  $('#navigate-work-items').classList.toggle('active', !administration);
+  $('#navigate-administration').classList.toggle('active', administration);
+  $('#page-eyebrow').textContent = administration ? 'USER MANAGEMENT' : 'WORK ITEM MANAGEMENT';
+  $('#page-title').textContent = administration ? 'Workspace administration' : 'My work items';
+}
+
 function renderProfile() {
   $('#workspace-label').textContent = `${currentUser.companyCode} workspace`;
   $('#role-badge').textContent = currentUser.role.replaceAll('_', ' ');
-  $('#profile-username').textContent = currentUser.username;
-  $('#profile-company').textContent = currentUser.companyCode;
+  const displayName = [currentUser.firstName, currentUser.lastName].filter(Boolean).join(' ')
+    || currentUser.username;
+  $('#profile-username').textContent = displayName;
+  $('#profile-company').textContent = `${currentUser.username} · ${currentUser.companyCode}`;
   $('#profile-role').textContent = currentUser.role.replaceAll('_', ' ');
-  $('#avatar').textContent = initials(currentUser.username);
+  $('#avatar').textContent = initials(displayName);
 }
 
 function configureCreateForm() {
@@ -202,7 +225,10 @@ async function loadAssignmentContext() {
     $('#assignment-definition').replaceChildren(...definitions.map(item =>
       new Option(`${item.displayName} (${item.type})`, item.id)));
     renderCheckboxOptions($('#assignment-user'), users.filter(user => user.active && user.tenantId === tenantId)
-      .map(user => ({value:user.id, label:`${user.username} · ${user.role.replaceAll('_', ' ')}`})));
+      .map(user => ({
+        value:user.id,
+        label:`${[user.firstName, user.lastName].filter(Boolean).join(' ') || user.username} · ${user.username} · ${user.role.replaceAll('_', ' ')}`
+      })));
     updateAssignmentTargets();
     renderAssignments(assignments);
   } catch (cause) { notice(cause.message, true); }
@@ -262,59 +288,164 @@ async function removeAssignment(assignment) {
 async function loadMyWork() {
   try {
     const params = new URLSearchParams();
+    const summaryParams = new URLSearchParams();
     const type = $('#my-work-type').value.trim();
     const status = $('#my-work-status').value.trim();
     const email = $('#my-work-email').value.trim();
-    if (type) params.set('workItemType', type);
+    if (type) {
+      params.set('workItemType', type);
+      summaryParams.set('workItemType', type);
+    }
     if (status) params.set('status', status);
-    if (email) params.set('email', email);
-    if ($('#my-work-terminal').checked) params.set('includeTerminal', 'true');
+    if (email) {
+      params.set('email', email);
+      summaryParams.set('email', email);
+    }
+    if ($('#my-work-terminal').checked) {
+      params.set('includeTerminal', 'true');
+      summaryParams.set('includeTerminal', 'true');
+    }
     params.set('page', String(myWorkPage));
     params.set('size', $('#my-work-size').value);
     params.set('sortBy', $('#my-work-sort').value);
     params.set('sortDirection', $('#my-work-direction').value);
-    const result = await api(`/api/v1/work-items/my-work?${params}`);
+    const [result, statusSummary] = await Promise.all([
+      api(`/api/v1/work-items/my-work?${params}`),
+      api(`/api/v1/work-items/my-work/status-summary?${summaryParams}`)
+    ]);
     if (result.totalPages > 0 && myWorkPage >= result.totalPages) {
       myWorkPage = result.totalPages - 1;
       return loadMyWork();
     }
+    renderWorkStatusSummary(statusSummary, status);
     const executions = result.items;
     const root = $('#my-work');
     updateMyWorkPagination(result);
     if (!executions.length) { root.innerHTML = '<div class="empty">No work item activities are assigned to you.</div>'; return; }
     root.replaceChildren(...executions.map(execution => {
-      const card = document.createElement('article'); card.className = 'card workflow-card';
-      const title = document.createElement('h3'); title.textContent = execution.emailId;
-      const subtitle = document.createElement('p'); subtitle.textContent = `${execution.workItemDisplayName} · ${execution.workItemType}`;
-      const state = document.createElement('div'); state.className = 'workflow-state';
-      const stateLabel = document.createElement('span'); stateLabel.textContent = execution.currentStatusDisplayName;
-      state.append(stateLabel);
+      const row = document.createElement('article');
+      row.className = 'workflow-row';
+      const number = documentNode(
+        'div',
+        'workflow-cell workflow-number',
+        String(execution.workItemNumber));
+      const subject = documentNode('div', 'workflow-cell workflow-subject');
+      subject.append(
+        documentNode('strong', '', abbreviatedSubject(execution.emailSubject)),
+        documentNode('small', '', execution.emailSubject ? 'Email subject' : 'No email subject')
+      );
+      const sender = documentNode('div', 'workflow-cell workflow-sender');
+      sender.append(
+        documentNode('strong', '', execution.emailSender || '—'),
+        documentNode('small', '', execution.emailSender ? 'Email sender' : 'No email sender')
+      );
+      const typeCell = documentNode('div', 'workflow-cell workflow-type');
+      typeCell.append(
+        documentNode('strong', '', execution.workItemDisplayName),
+        documentNode('small', '', execution.workItemType)
+      );
+      const state = documentNode('div', 'workflow-cell workflow-state');
+      state.append(documentNode('span', '', execution.currentStatusDisplayName));
+      const updated = documentNode(
+        'div',
+        'workflow-cell workflow-updated',
+        new Date(execution.updatedAt).toLocaleString());
       const actions = document.createElement('div'); actions.className = 'workflow-actions';
       const open = document.createElement('button');
-      open.textContent = execution.conversationId ? 'Open email and decide' : 'Open work item';
+      open.className = 'workflow-open-icon';
+      open.textContent = '→';
+      const openLabel = execution.conversationId ? 'Open email and work item' : 'Open work item';
+      open.title = openLabel;
+      open.setAttribute('aria-label', openLabel);
       open.onclick = () => openWorkItem(execution.id, open);
       actions.append(open);
+
+      const actionMenu = document.createElement('details');
+      actionMenu.className = 'row-action-menu';
+      const actionMenuToggle = document.createElement('summary');
+      actionMenuToggle.textContent = '⋯';
+      actionMenuToggle.title = 'Work-item actions';
+      actionMenuToggle.setAttribute('aria-label', 'Work-item actions');
+      const actionMenuItems = document.createElement('div');
+      actionMenuItems.className = 'row-action-menu-items';
       execution.allowedTransitions.forEach(transition => {
         const quick = document.createElement('button');
         quick.className = 'quick-transition';
         quick.textContent = `${transition.label} → ${transition.toStatus}`;
         quick.title = 'Apply this transition without opening the email';
-        quick.onclick = () => performTransition(execution.id, transition.id, quick);
-        actions.append(quick);
+        quick.onclick = () => {
+          actionMenu.open = false;
+          performTransition(execution.id, transition.id, quick);
+        };
+        actionMenuItems.append(quick);
       });
-      card.append(title, subtitle, state, actions);
-      if (execution.activities.length) {
-        const history = document.createElement('div'); history.className = 'activity-history';
-        execution.activities.slice(0, 5).forEach(activity => {
-          const line = document.createElement('div');
-          line.textContent = `${activity.fromStatus} → ${activity.toStatus} by ${activity.performedByUsername} · ${new Date(activity.performedAt).toLocaleString()}`;
-          history.append(line);
-        });
-        card.append(history);
+      if (!execution.allowedTransitions.length) {
+        actionMenuItems.append(documentNode('span', 'row-action-menu-empty', 'No actions available'));
       }
-      return card;
+      actionMenu.append(actionMenuToggle, actionMenuItems);
+      actionMenu.addEventListener('toggle', () => {
+        if (!actionMenu.open) return;
+        document.querySelectorAll('.row-action-menu[open]').forEach(menu => {
+          if (menu !== actionMenu) menu.open = false;
+        });
+      });
+      actions.append(actionMenu);
+      row.append(number, subject, sender, typeCell, state, updated, actions);
+      return row;
     }));
   } catch (cause) { notice(cause.message, true); }
+}
+
+async function loadMyWorkTypeOptions() {
+  const select = $('#my-work-type');
+  const selectedType = select.value;
+  const definitions = await api('/api/v1/work-items/effective');
+  const types = [...new Map(
+    definitions
+      .filter(definition => definition.active)
+      .map(definition => [
+        definition.type,
+        definition.displayName || definition.type
+      ])
+  ).entries()].sort((left, right) => left[1].localeCompare(right[1]));
+  select.replaceChildren(
+    new Option('All work-item types', ''),
+    ...types.map(([type, displayName]) =>
+      new Option(`${displayName} (${type})`, type))
+  );
+  if (types.some(([type]) => type === selectedType)) {
+    select.value = selectedType;
+  }
+}
+
+function abbreviatedSubject(subject) {
+  if (!subject) return '—';
+  const value = subject.trim();
+  return value.length > 60 ? `${value.slice(0, 60)}…` : value;
+}
+
+function renderWorkStatusSummary(statuses, selectedStatus) {
+  const root = $('#my-work-status-summary');
+  const total = statuses.reduce((sum, status) => sum + status.count, 0);
+  const options = [{status:'', displayName:'All', count:total}, ...statuses];
+  root.replaceChildren(...options.map(option => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'work-status-tile';
+    button.classList.toggle(
+      'active',
+      (selectedStatus || '').toLowerCase() === option.status.toLowerCase());
+    button.append(
+      documentNode('span', 'work-status-count', option.count),
+      documentNode('span', 'work-status-name', option.displayName)
+    );
+    button.onclick = () => {
+      $('#my-work-status').value = option.status;
+      myWorkPage = 0;
+      loadMyWork();
+    };
+    return button;
+  }));
 }
 
 function updateMyWorkPagination(result) {
@@ -339,8 +470,10 @@ async function openWorkItem(executionId, button) {
     const detail = await api(`/api/v1/work-items/executions/${executionId}`);
     const execution = detail.execution;
     const conversation = detail.conversation;
-    $('#work-detail-title').textContent = conversation?.subject || `${execution.workItemDisplayName} · ${execution.emailId}`;
+    activeWorkItemId = execution.id;
+    $('#work-detail-title').textContent = `${execution.workItemNumber} · ${conversation?.subject || execution.workItemDisplayName}`;
     const metadata = [];
+    metadata.push(`Work item number: ${execution.workItemNumber}`);
     metadata.push(`Account: ${execution.emailId}`);
     metadata.push(`Work item: ${execution.workItemDisplayName}`);
     metadata.push(`Status: ${execution.currentStatusDisplayName}`);
@@ -351,13 +484,22 @@ async function openWorkItem(executionId, button) {
       const line = document.createElement('div'); line.textContent = value; return line;
     }));
 
-    const text = $('#work-detail-text');
-    const frame = $('#work-detail-html');
-    text.classList.add('hidden');
-    frame.classList.remove('hidden');
-    const renderedHtml = conversation?.contentHtml
-      || `<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;margin:0">${escapeHtml(conversation?.contentText || conversation?.snippet || 'No email body is available for this conversation.')}</pre>`;
-    frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><meta name="color-scheme" content="light">${renderedHtml}`;
+    const communications = detail.communications?.length
+      ? detail.communications
+      : (conversation ? [conversation] : []);
+    const documents = detail.documents || [];
+    renderCommunications(communications, documents, execution.id);
+
+    renderWorkItemDocuments(execution.id, documents, communications);
+    renderInternalNotes(detail.internalNotes || []);
+    $('#work-note-content').value = '';
+    $('#work-note-error').classList.add('hidden');
+    $('#work-reply-editor').innerHTML = '';
+    $('#work-reply-error').classList.add('hidden');
+    $('#work-document-error').classList.add('hidden');
+    $('#work-document-file').value = '';
+    $('#work-reply-files').value = '';
+    $('#work-reply-section').classList.toggle('hidden', !conversation?.sender);
 
     const actions = $('#work-detail-actions');
     actions.replaceChildren(...execution.allowedTransitions.map(transition => {
@@ -386,6 +528,159 @@ async function openWorkItem(executionId, button) {
   }
 }
 
+function renderCommunications(communications, documents = [], executionId = activeWorkItemId) {
+  const root = $('#work-communications');
+  if (!communications.length) {
+    root.innerHTML = '<div class="empty">No email communication is linked to this work item.</div>';
+    return;
+  }
+  root.replaceChildren(...communications.map((communication, index) => {
+    const card = documentNode('details', 'communication-card');
+    card.open = index === communications.length - 1;
+    const heading = documentNode('summary', 'communication-heading');
+    const description = documentNode('div');
+    description.append(
+      documentNode('strong', '', communication.subject || '(No subject)'),
+      documentNode('small', '', `${communication.sender || 'Unknown sender'} → ${communication.recipients || 'Unknown recipient'}${communication.sentAt ? ` · ${new Date(communication.sentAt).toLocaleString()}` : ''}`)
+    );
+    if (communication.contentSource) {
+      description.append(documentNode(
+        'small',
+        `communication-source${communication.staleFallback ? ' stale' : ''}`,
+        communication.contentSource === 'CONVERSATION_TABLE'
+          ? 'Loaded from conversation store'
+          : communication.contentSource === 'PROVIDER'
+            ? 'Loaded from email provider'
+            : communication.contentSource === 'FALLBACK_CACHE'
+              ? 'Conversation store and provider unavailable · showing saved fallback'
+              : communication.contentSource === 'METADATA_ONLY'
+                ? 'Content unavailable · metadata only'
+                : 'Loaded from short-lived cache'));
+    }
+    const direction = documentNode('span', `communication-direction ${communication.direction?.toLowerCase() || ''}`, communication.direction || 'EMAIL');
+    heading.append(description, direction);
+    const frame = documentNode('iframe', 'communication-frame');
+    frame.setAttribute('sandbox', '');
+    frame.title = `${communication.direction || 'Email'} communication`;
+    const renderedHtml = communication.contentHtml
+      || `<pre style="white-space:pre-wrap;font:14px/1.6 system-ui;margin:0">${escapeHtml(communication.contentText || communication.snippet || 'No email body is available.')}</pre>`;
+    frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><meta name="color-scheme" content="light">${renderedHtml}`;
+    const attachments = documents.filter(
+      document => document.sourceConversationId === communication.id);
+    card.append(heading);
+    if (attachments.length) {
+      const attachmentSection = documentNode('section', 'communication-attachments');
+      attachmentSection.append(documentNode(
+        'div',
+        'communication-attachments-title',
+        `Attachments (${attachments.length})`));
+      attachments.forEach(document => {
+        const link = documentNode('a', 'communication-attachment');
+        link.href = `/api/v1/work-items/executions/${executionId}/documents/${document.id}`;
+        link.append(
+          documentNode('strong', '', document.filename),
+          documentNode(
+            'span',
+            '',
+            `${document.contentType || 'File'} · ${formatBytes(document.size)} · ${document.origin}`)
+        );
+        attachmentSection.append(link);
+      });
+      card.append(attachmentSection);
+    }
+    card.append(frame);
+    return card;
+  }));
+}
+
+function renderWorkItemDocuments(executionId, documents, communications = []) {
+  const root = $('#work-detail-documents');
+  if (!documents.length) {
+    root.innerHTML = '<div class="empty">No attachments</div>';
+    return;
+  }
+  const conversationsById = new Map(
+    communications.map(communication => [communication.id, communication]));
+  const origins = ['INBOUND', 'INTERNAL', 'OUTBOUND'];
+  root.replaceChildren(...origins.flatMap(origin => {
+    const matching = documents.filter(document => document.origin === origin);
+    if (!matching.length) return [];
+    const group = documentNode('section', 'document-group');
+    group.append(documentNode('div', 'document-group-title', origin));
+    matching.forEach(document => {
+      const row = documentNode('div', 'document-item');
+      const select = documentNode('input');
+      select.type = 'checkbox';
+      select.className = 'reply-document';
+      select.value = document.id;
+      select.title = 'Attach this document to the next email reply';
+      select.onchange = updateReplyAttachmentSummary;
+      const link = documentNode('a');
+      link.href = `/api/v1/work-items/executions/${executionId}/documents/${document.id}`;
+      link.append(
+        documentNode('strong', '', document.filename),
+        documentNode('span', '', documentDescription(
+          document, conversationsById.get(document.sourceConversationId)))
+      );
+      row.append(select, link);
+      group.append(row);
+    });
+    return [group];
+  }));
+  updateReplyAttachmentSummary();
+}
+
+function documentDescription(document, conversation) {
+  const details = [document.contentType || 'File', formatBytes(document.size)];
+  if (document.uploadedByUsername) details.push(document.uploadedByUsername);
+  if (conversation) {
+    details.push(`Email: ${conversation.subject || '(No subject)'}`);
+  } else if (document.sourceConversationId) {
+    details.push('Linked email');
+  } else {
+    details.push('Internal document');
+  }
+  return details.join(' · ');
+}
+
+function updateReplyAttachmentSummary() {
+  const selectedDocuments = document.querySelectorAll('.reply-document:checked').length;
+  const selectedFiles = $('#work-reply-files')?.files?.length || 0;
+  const total = selectedDocuments + selectedFiles;
+  $('#work-reply-attachments').textContent = total
+    ? `${total} document(s) will be attached to this reply.`
+    : 'Select documents in the sidebar to attach them to this reply.';
+}
+
+function renderInternalNotes(notes) {
+  const root = $('#work-detail-notes');
+  if (!notes.length) {
+    root.innerHTML = '<div class="empty">No internal notes</div>';
+    return;
+  }
+  root.replaceChildren(...notes.map(note => {
+    const item = documentNode('article', 'internal-note');
+    item.append(
+      documentNode('p', '', note.content),
+      documentNode('small', '', `${note.authorUsername} · ${new Date(note.createdAt).toLocaleString()}`)
+    );
+    return item;
+  }));
+}
+
+function documentNode(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function formatBytes(size) {
+  if (!Number.isFinite(size) || size < 1024) return `${size || 0} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 async function performTransition(executionId, transitionId, button) {
   button.disabled = true;
   try {
@@ -394,6 +689,139 @@ async function performTransition(executionId, transitionId, button) {
     notice('Work item activity completed.'); await loadMyWork();
   } catch (cause) { notice(cause.message, true); button.disabled = false; }
 }
+
+$('#work-note-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  $('#work-note-error').classList.add('hidden');
+  try {
+    await api(`/api/v1/work-items/executions/${activeWorkItemId}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({content: $('#work-note-content').value})
+    });
+    const detail = await api(`/api/v1/work-items/executions/${activeWorkItemId}`);
+    renderInternalNotes(detail.internalNotes || []);
+    $('#work-note-content').value = '';
+    notice('Internal note added.');
+  } catch (cause) {
+    formError('#work-note-error', cause.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('#work-document-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  const file = $('#work-document-file').files[0];
+  if (!file) return;
+  button.disabled = true;
+  $('#work-document-error').classList.add('hidden');
+  try {
+    await uploadWorkItemDocument(activeWorkItemId, file);
+    const detail = await api(`/api/v1/work-items/executions/${activeWorkItemId}`);
+    renderWorkItemDocuments(
+      activeWorkItemId,
+      detail.documents || [],
+      detail.communications || []);
+    $('#work-document-file').value = '';
+    notice('Internal document uploaded.');
+  } catch (cause) {
+    formError('#work-document-error', cause.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+async function uploadWorkItemDocument(executionId, file) {
+  const body = new FormData();
+  body.append('file', file, file.name);
+  const response = await fetch(`/api/v1/work-items/executions/${executionId}/documents`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    body
+  });
+  if (!response.ok) {
+    let error = {};
+    try { error = await response.json(); } catch (_) {}
+    throw new Error(error.error || `Upload failed (${response.status})`);
+  }
+  return response.json();
+}
+
+document.querySelectorAll('.editor-toolbar [data-command]').forEach(button => {
+  button.onclick = () => {
+    const command = button.dataset.command;
+    let value = null;
+    if (command === 'createLink') {
+      value = window.prompt('Enter the link URL');
+      if (!value) return;
+      try {
+        const url = new URL(value, window.location.origin);
+        if (!['http:', 'https:', 'mailto:'].includes(url.protocol)) {
+          throw new Error();
+        }
+        value = url.href;
+      } catch (_) {
+        formError('#work-reply-error', 'Use a valid HTTP, HTTPS, or mailto link.');
+        return;
+      }
+    }
+    $('#work-reply-editor').focus();
+    document.execCommand(command, false, value);
+  };
+});
+
+$('#send-work-reply').onclick = async event => {
+  const button = event.currentTarget;
+  const editor = $('#work-reply-editor');
+  if (!editor.textContent.trim() && !editor.querySelector('img')) {
+    formError('#work-reply-error', 'Write a reply before sending.');
+    return;
+  }
+  button.disabled = true;
+  $('#work-reply-error').classList.add('hidden');
+  try {
+    const selectedDocumentIds = [...document.querySelectorAll('.reply-document:checked')]
+      .map(input => input.value);
+    const newFiles = [...$('#work-reply-files').files];
+    if (selectedDocumentIds.length + newFiles.length > 20) {
+      throw new Error('At most 20 documents can be attached to one reply.');
+    }
+    const uploaded = await Promise.all(
+      newFiles.map(file => uploadWorkItemDocument(activeWorkItemId, file)));
+    await api(`/api/v1/work-item-replies/${activeWorkItemId}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        requestId: crypto.randomUUID(),
+        htmlBody: editor.innerHTML,
+        documentIds: [...new Set([
+          ...selectedDocumentIds,
+          ...uploaded.map(document => document.id)
+        ])]
+      })
+    });
+    editor.innerHTML = '';
+    $('#work-reply-files').value = '';
+    const detail = await api(`/api/v1/work-items/executions/${activeWorkItemId}`);
+    renderCommunications(
+      detail.communications || [],
+      detail.documents || [],
+      activeWorkItemId);
+    renderWorkItemDocuments(
+      activeWorkItemId,
+      detail.documents || [],
+      detail.communications || []);
+    notice('Reply sent and recorded in the conversation.');
+  } catch (cause) {
+    formError('#work-reply-error', cause.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('#work-reply-files').onchange = updateReplyAttachmentSummary;
 
 async function loadWorkAccounts() {
   try {
@@ -476,14 +904,26 @@ async function loadUsers() {
     root.replaceChildren(...users.map(user => {
       const row = document.createElement('article'); row.className = 'user-row';
       const identity = document.createElement('div'); identity.className = 'user-identity';
-      const avatar = document.createElement('span'); avatar.className = 'mini-avatar'; avatar.textContent = initials(user.username);
+      const displayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username;
+      const avatar = document.createElement('span'); avatar.className = 'mini-avatar'; avatar.textContent = initials(displayName);
       const copy = document.createElement('div');
-      const name = document.createElement('h4'); name.textContent = user.username;
-      const company = document.createElement('p'); company.textContent = user.companyCode;
+      const name = document.createElement('h4'); name.textContent = displayName;
+      const company = document.createElement('p'); company.textContent = `${user.username} · ${user.companyCode}`;
       copy.append(name, company); identity.append(avatar, copy);
       const actions = document.createElement('div'); actions.className = 'user-actions';
       if (user.mustChangePassword) { const force = document.createElement('span'); force.className = 'force'; force.textContent = 'PASSWORD CHANGE DUE'; actions.append(force); }
       const role = document.createElement('span'); role.className = 'user-role'; role.textContent = user.role.replaceAll('_', ' '); actions.append(role);
+      const status = document.createElement('span');
+      status.className = `tenant-status${user.active ? ' enabled' : ''}`;
+      status.textContent = user.active ? 'ACTIVE' : 'INACTIVE';
+      actions.append(status);
+      if (canEditUser(user)) {
+        const edit = document.createElement('button');
+        edit.className = 'tenant-edit';
+        edit.textContent = 'Edit';
+        edit.onclick = () => openUserEditForm(user);
+        actions.append(edit);
+      }
       if (canReset(user)) {
         const reset = document.createElement('button'); reset.className = 'reset'; reset.textContent = 'Reset password';
         reset.onclick = () => resetPassword(user); actions.append(reset);
@@ -493,9 +933,38 @@ async function loadUsers() {
   } catch (cause) { notice(cause.message, true); }
 }
 
+function canEditUser(user) {
+  if (user.id === currentUser.id) return true;
+  return currentUser.role === 'GLOBAL_ADMIN'
+    || !['GLOBAL_ADMIN', 'ADMIN'].includes(user.role);
+}
+
 function canReset(user) {
   if (user.id === currentUser.id) return false;
   return currentUser.role === 'GLOBAL_ADMIN' || !['GLOBAL_ADMIN', 'ADMIN'].includes(user.role);
+}
+
+function openUserEditForm(user) {
+  const ownAccount = user.id === currentUser.id;
+  const roles = ownAccount
+    ? [user.role]
+    : currentUser.role === 'GLOBAL_ADMIN'
+      ? ['GLOBAL_ADMIN', 'ADMIN', 'PROCESSOR', 'BASE_USER']
+      : ['PROCESSOR', 'BASE_USER'];
+  $('#edit-role').replaceChildren(...roles.map(
+    role => new Option(role.replaceAll('_', ' '), role)));
+  $('#edit-user-id').value = user.id;
+  $('#edit-company-code').value = user.companyCode;
+  $('#edit-username').value = user.username;
+  $('#edit-first-name').value = user.firstName;
+  $('#edit-last-name').value = user.lastName;
+  $('#edit-role').value = user.role;
+  $('#edit-role').disabled = ownAccount;
+  $('#edit-user-active').checked = user.active;
+  $('#edit-user-active').disabled = ownAccount;
+  $('#edit-user-error').classList.add('hidden');
+  $('#create-user-form').classList.add('hidden');
+  $('#edit-user-form').classList.remove('hidden');
 }
 
 async function resetPassword(user) {
@@ -547,11 +1016,52 @@ $('#self-password-form').onsubmit = async event => {
 $('#create-user-form').onsubmit = async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true; $('#create-error').classList.add('hidden');
   try {
-    await api('/api/v1/users', {method:'POST', body:JSON.stringify({companyCode:$('#new-company-code').value, username:$('#new-username').value, role:$('#new-role').value, temporaryPassword:$('#new-temporary-password').value})});
+    await api('/api/v1/users', {method:'POST', body:JSON.stringify({
+      companyCode:$('#new-company-code').value,
+      username:$('#new-username').value,
+      firstName:$('#new-first-name').value,
+      lastName:$('#new-last-name').value,
+      role:$('#new-role').value,
+      temporaryPassword:$('#new-temporary-password').value
+    })});
     event.target.reset(); configureCreateForm(); event.target.classList.add('hidden'); notice('User created with a required first-login password change.');
     await Promise.all([loadUsers(), loadAssignmentContext()]);
   } catch (cause) { formError('#create-error', cause.message); }
   finally { button.disabled = false; }
+};
+
+$('#edit-user-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  $('#edit-user-error').classList.add('hidden');
+  const userId = $('#edit-user-id').value;
+  try {
+    const updated = await api(`/api/v1/users/${userId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        username: $('#edit-username').value,
+        firstName: $('#edit-first-name').value,
+        lastName: $('#edit-last-name').value,
+        role: $('#edit-role').value,
+        active: $('#edit-user-active').checked
+      })
+    });
+    if (updated.id === currentUser.id) {
+      currentUser = {...currentUser, ...updated};
+      $('#profile-username').textContent = currentUser.username;
+      $('#avatar').textContent = initials(
+        [currentUser.firstName, currentUser.lastName].filter(Boolean).join(' ')
+          || currentUser.username);
+    }
+    event.target.classList.add('hidden');
+    notice(`User ${updated.username} updated.`);
+    await Promise.all([loadUsers(), loadAssignmentContext()]);
+  } catch (cause) {
+    formError('#edit-user-error', cause.message);
+  } finally {
+    button.disabled = false;
+  }
 };
 
 $('#tenant-form').onsubmit = async event => {
@@ -589,7 +1099,11 @@ $('#work-item-form').onsubmit = async event => {
       {method: definitionId ? 'PUT' : 'POST', body:JSON.stringify(payload)});
     $('#work-item-form').classList.add('hidden');
     notice(definitionId ? 'Work item graph updated.' : 'Work item graph created.');
-    await Promise.all([loadWorkItemDefinitions(), loadWorkAccounts()]);
+    await Promise.all([
+      loadWorkItemDefinitions(),
+      loadWorkAccounts(),
+      loadMyWorkTypeOptions()
+    ]);
   } catch (cause) { formError('#work-item-error', cause.message); }
   finally { button.disabled = false; }
 };
@@ -646,8 +1160,12 @@ $('#work-account-form').onsubmit = async event => {
   finally { button.disabled = false; }
 };
 
-$('#show-create').onclick = () => $('#create-user-form').classList.remove('hidden');
+$('#show-create').onclick = () => {
+  $('#edit-user-form').classList.add('hidden');
+  $('#create-user-form').classList.remove('hidden');
+};
 $('#cancel-create').onclick = () => $('#create-user-form').classList.add('hidden');
+$('#cancel-edit-user').onclick = () => $('#edit-user-form').classList.add('hidden');
 $('#show-tenant-form').onclick = () => openTenantForm();
 $('#cancel-tenant').onclick = () => $('#tenant-form').classList.add('hidden');
 $('#show-work-item-form').onclick = () => openWorkItemForm();
@@ -662,6 +1180,11 @@ $('#show-work-account-form').onclick = () => openWorkAccountForm();
 $('#cancel-work-account').onclick = () => $('#work-account-form').classList.add('hidden');
 $('#work-account-tenant').onchange = event => loadEffectiveWorkItems(event.target.value).catch(cause => notice(cause.message, true));
 $('#refresh-my-work').onclick = loadMyWork;
+$('#navigate-work-items').onclick = () => {
+  showWorkspaceScreen('work-items');
+  loadMyWork();
+};
+$('#navigate-administration').onclick = () => showWorkspaceScreen('administration');
 $('#my-work-filters').onsubmit = event => { event.preventDefault(); myWorkPage = 0; loadMyWork(); };
 $('#clear-my-work-filters').onclick = () => {
   $('#my-work-filters').reset();

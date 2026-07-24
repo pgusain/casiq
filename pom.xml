@@ -9,6 +9,7 @@
   <packaging>pom</packaging>
 
   <modules>
+    <module>attachment-storage</module>
     <module>user-management</module>
     <module>work-item-management</module>
     <module>work-account-management</module>
@@ -26,6 +27,7 @@
     <surefire-plugin.version>3.5.4</surefire-plugin.version>
     <flyway.version>12.0.0</flyway.version>
     <postgresql.version>42.7.11</postgresql.version>
+    <quarkus.amazon.services.version>3.16.0</quarkus.amazon.services.version>
   </properties>
 
   <dependencyManagement>
@@ -34,6 +36,13 @@
         <groupId>${quarkus.platform.group-id}</groupId>
         <artifactId>${quarkus.platform.artifact-id}</artifactId>
         <version>${quarkus.platform.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.quarkiverse.amazonservices</groupId>
+        <artifactId>quarkus-amazon-services-bom</artifactId>
+        <version>${quarkus.amazon.services.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>

@@ -11,6 +11,7 @@ import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.CookieParam;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
@@ -35,7 +36,18 @@ public class UserAdministrationResource {
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @Valid @NotNull CreateUserRequest request) {
         return users.create(token, request.companyCode(), request.username(),
+                request.firstName(), request.lastName(),
                 request.temporaryPassword(), request.role());
+    }
+
+    @PUT
+    @Path("/{id}")
+    public UserView update(
+            @CookieParam(AuthResource.SESSION_COOKIE) String token,
+            @PathParam("id") UUID id,
+            @Valid @NotNull UpdateUserRequest request) {
+        return users.update(token, id, request.username(), request.firstName(),
+                request.lastName(), request.role(), request.active());
     }
 
     @POST
@@ -50,9 +62,18 @@ public class UserAdministrationResource {
     public record CreateUserRequest(
             @Size(max = 64) String companyCode,
             @NotBlank @Size(max = 128) String username,
+            @NotBlank @Size(max = 128) String firstName,
+            @NotBlank @Size(max = 128) String lastName,
             @NotBlank @Size(min = 12, max = 128) String temporaryPassword,
             @NotNull UserRole role) {}
 
     public record ResetPasswordRequest(
             @NotBlank @Size(min = 12, max = 128) String temporaryPassword) {}
+
+    public record UpdateUserRequest(
+            @NotBlank @Size(max = 128) String username,
+            @NotBlank @Size(max = 128) String firstName,
+            @NotBlank @Size(max = 128) String lastName,
+            @NotNull UserRole role,
+            boolean active) {}
 }

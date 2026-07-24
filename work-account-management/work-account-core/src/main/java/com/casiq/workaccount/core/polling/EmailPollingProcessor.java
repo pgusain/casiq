@@ -1,9 +1,12 @@
 package com.casiq.workaccount.core.polling;
 
+import com.casiq.storage.AttachmentStorage;
 import com.casiq.workaccount.core.persistence.EmailPollingConfigEntity;
 import com.casiq.workaccount.core.persistence.ConversationDirection;
 import com.casiq.workaccount.core.persistence.WorkAccountConversationEntity;
+import com.casiq.workaccount.core.persistence.WorkAccountConversationAttachmentEntity;
 import com.casiq.workaccount.core.persistence.WorkAccountEntity;
+import com.casiq.workitem.persistence.WorkItemCommunicationEntity;
 import io.quarkus.hibernate.orm.panache.Panache;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -21,6 +24,7 @@ import java.util.UUID;
 public class EmailPollingProcessor {
     private static final Logger LOG = Logger.getLogger(EmailPollingProcessor.class);
     @Inject Instance<EmailProviderConnector> connectors;
+    @Inject AttachmentStorage attachmentStorage;
     @ConfigProperty(name = "casiq.email-polling.poll-interval-seconds") long pollIntervalSeconds;
     @ConfigProperty(name = "casiq.email-polling.initial-lookback-hours") long initialLookbackHours;
 
@@ -94,6 +98,9 @@ public class EmailPollingProcessor {
             if (message == null || message.providerMessageId() == null
                     || WorkAccountConversationEntity.count(
                     "workAccount.id = ?1 and providerMessageId = ?2",
+                    account.id, message.providerMessageId()) > 0
+                    || WorkItemCommunicationEntity.count(
+                    "workAccountId = ?1 and providerMessageId = ?2",
                     account.id, message.providerMessageId()) > 0) {
                 continue;
             }
@@ -117,8 +124,43 @@ public class EmailPollingProcessor {
             conversation.contentHtml = message.contentHtml();
             conversation.receivedAt = receivedAt;
             Panache.getEntityManager().persist(conversation);
+            persistAttachments(conversation, message.attachments(), receivedAt);
             persisted++;
         }
         return persisted;
+    }
+
+    private void persistAttachments(
+            WorkAccountConversationEntity conversation,
+            List<EmailProviderConnector.EmailAttachment> attachments,
+            Instant receivedAt) {
+        if (attachments == null) return;
+        for (EmailProviderConnector.EmailAttachment attachment : attachments) {
+            if (attachment == null || attachment.providerAttachmentId() == null
+                    || attachment.filename() == null || attachment.content() == null) {
+                continue;
+            }
+            WorkAccountConversationAttachmentEntity entity =
+                    new WorkAccountConversationAttachmentEntity();
+            AttachmentStorage.StoredObject stored = attachmentStorage.put(
+                    conversation.tenant.id,
+                    "inbound",
+                    attachment.filename(),
+                    attachment.contentType(),
+                    attachment.content());
+            entity.tenant = conversation.tenant;
+            entity.conversation = conversation;
+            entity.providerAttachmentId = attachment.providerAttachmentId();
+            entity.filename = attachment.filename();
+            entity.contentType = attachment.contentType();
+            entity.contentSize = stored.size();
+            entity.storageProvider = stored.provider();
+            entity.storageKey = stored.key();
+            entity.contentData = null;
+            entity.createdAt = receivedAt;
+            Panache.getEntityManager().persist(entity);
+        }
+        LOG.debugf("Captured email attachments conversationId=%s count=%d",
+                conversation.id, attachments.size());
     }
 }

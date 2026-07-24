@@ -18,7 +18,8 @@ public final class WorkItemWorkflowView {
                            UUID performedByUserId, String performedByUsername, Instant performedAt) {}
 
     public record Execution(
-            UUID id, UUID workAccountId, UUID conversationId, String emailId,
+            UUID id, long workItemNumber, UUID workAccountId, UUID conversationId,
+            String emailId, String emailSubject, String emailSender,
             UUID definitionId, String workItemType,
             String workItemDisplayName, UUID currentStatusId, String currentStatus,
             String currentStatusDisplayName, boolean terminal,
@@ -34,9 +35,33 @@ public final class WorkItemWorkflowView {
             String snippet,
             String contentText,
             String contentHtml,
-            String direction) {}
+            String direction,
+            String contentSource,
+            boolean staleFallback) {}
 
-    public record Detail(Execution execution, Conversation conversation) {}
+    public record Document(
+            UUID id,
+            String filename,
+            String contentType,
+            long size,
+            String origin,
+            UUID sourceConversationId,
+            String uploadedByUsername,
+            Instant createdAt) {}
+
+    public record InternalNote(
+            UUID id,
+            UUID authorUserId,
+            String authorUsername,
+            String content,
+            Instant createdAt) {}
+
+    public record Detail(
+            Execution execution,
+            Conversation conversation,
+            List<Conversation> communications,
+            List<Document> documents,
+            List<InternalNote> internalNotes) {}
 
     public record WorkPage(
             List<Execution> items,
@@ -46,4 +71,10 @@ public final class WorkItemWorkflowView {
             int totalPages,
             String sortBy,
             String sortDirection) {}
+
+    public record StatusCount(
+            String status,
+            String displayName,
+            boolean terminal,
+            long count) {}
 }

@@ -27,6 +27,22 @@ public interface GmailMailboxClient {
             @PathParam("id") String id,
             @QueryParam("format") String format);
 
+    @GET
+    @Path("/gmail/v1/users/me/messages/{messageId}/attachments/{attachmentId}")
+    @Produces(MediaType.APPLICATION_JSON)
+    MessageBody attachment(
+            @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
+            @PathParam("messageId") String messageId,
+            @PathParam("attachmentId") String attachmentId);
+
+    @POST
+    @Path("/gmail/v1/users/me/messages/send")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    GmailMessage send(
+            @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
+            SendMessage message);
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MessageList(List<MessageReference> messages,
                        @JsonProperty("nextPageToken") String nextPageToken) {}
@@ -50,4 +66,5 @@ public interface GmailMailboxClient {
             String data) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MessageHeader(String name, String value) {}
+    record SendMessage(String raw, @JsonProperty("threadId") String threadId) {}
 }

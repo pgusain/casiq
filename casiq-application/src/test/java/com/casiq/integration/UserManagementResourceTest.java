@@ -9,11 +9,13 @@ import com.casiq.workaccount.core.service.WorkAccountService;
 import com.casiq.workaccount.core.persistence.EmailPollingConfigEntity;
 import com.casiq.workaccount.core.persistence.ConversationDirection;
 import com.casiq.workaccount.core.persistence.WorkAccountConversationEntity;
+import com.casiq.workaccount.core.persistence.WorkAccountConversationAttachmentEntity;
 import com.casiq.workaccount.core.persistence.WorkAccountEntity;
 import com.casiq.workaccount.core.polling.EmailPollingStateService;
 import com.casiq.workitem.conversation.ConversationWorkItemProcessor;
 import com.casiq.workitem.conversation.ConversationWorkItemStateService;
 import com.casiq.workitem.persistence.WorkItemExecutionEntity;
+import com.casiq.workitem.service.WorkItemEmailContentResolver;
 import io.quarkus.hibernate.orm.panache.Panache;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.junit.QuarkusTest;
@@ -48,6 +50,7 @@ class UserManagementResourceTest {
     @Inject EmailPollingStateService pollingState;
     @Inject ConversationWorkItemStateService conversationWorkItemState;
     @Inject ConversationWorkItemProcessor conversationWorkItemProcessor;
+    @Inject WorkItemEmailContentResolver emailContentResolver;
 
     @Test
     void flywayCreatesTheInitialAdministratorOnAnEmptyDatabase() {
@@ -88,6 +91,10 @@ class UserManagementResourceTest {
                 .when().get("/api/v1/auth/me")
                 .then().statusCode(200)
                 .extract().path("tenantId");
+        String adminUserId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/auth/me")
+                .then().statusCode(200)
+                .extract().path("id");
 
         String incomeTaxWorkItemId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .queryParam("tenantId", adminTenantId)
@@ -99,6 +106,11 @@ class UserManagementResourceTest {
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200)
                 .extract().path("find { it.type == 'GST' }.id");
+        String gstInitialStatusId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .queryParam("tenantId", adminTenantId)
+                .when().get("/api/v1/work-items/effective")
+                .then().statusCode(200)
+                .extract().path("find { it.type == 'GST' }.statuses.find { it.initialStatus }.id");
 
         Response workAccountCreated = given().contentType(ContentType.JSON)
                 .cookie(AuthResource.SESSION_COOKIE, adminSession)
@@ -176,12 +188,38 @@ class UserManagementResourceTest {
             conversation.sender = "sender@example.com";
             conversation.recipients = account.emailId;
             conversation.contentText = "Please review the attached GST filing request.";
+            conversation.contentHtml = "<p>Please review the <strong>attached GST filing</strong> request.</p>";
             conversation.sentAt = Instant.now();
             conversation.receivedAt = Instant.now();
             Panache.getEntityManager().persist(conversation);
+            WorkAccountConversationAttachmentEntity attachment =
+                    new WorkAccountConversationAttachmentEntity();
+            attachment.tenant = account.tenant;
+            attachment.conversation = conversation;
+            attachment.providerAttachmentId = "attachment-1";
+            attachment.filename = "gst-filing.pdf";
+            attachment.contentType = "application/pdf";
+            attachment.contentData = "test-pdf-content".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            attachment.contentSize = attachment.contentData.length;
+            attachment.createdAt = Instant.now();
+            Panache.getEntityManager().persist(attachment);
             Panache.getEntityManager().flush();
             return conversation.id;
         });
+        WorkItemEmailContentResolver.ResolvedContent tableContent =
+                emailContentResolver.resolve(
+                        new WorkItemEmailContentResolver.EmailReference(
+                                UUID.fromString(adminTenantId),
+                                UUID.fromString(workAccountId),
+                                "GOOGLE",
+                                QuarkusTransaction.requiringNew().call(() ->
+                                        ((WorkAccountConversationEntity)
+                                                WorkAccountConversationEntity.findById(
+                                                        conversationId))
+                                                .providerMessageId)));
+        assertEquals("CONVERSATION_TABLE", tableContent.contentSource());
+        assertTrue(tableContent.contentHtml().contains("<strong>"));
+
         var firstConversationClaim =
                 conversationWorkItemState.claimDue("work-item-instance-one", Instant.now().plusSeconds(1));
         assertTrue(firstConversationClaim.contains(conversationId));
@@ -189,14 +227,19 @@ class UserManagementResourceTest {
                 conversationWorkItemState.claimDue("work-item-instance-two", Instant.now().plusSeconds(1));
         assertFalse(competingConversationClaim.contains(conversationId));
         conversationWorkItemProcessor.createExecution(conversationId, "work-item-instance-one");
+        AtomicReference<String> conversationExecutionId = new AtomicReference<>();
         QuarkusTransaction.requiringNew().run(() -> {
             WorkItemExecutionEntity execution =
                     WorkItemExecutionEntity.find("conversationId", conversationId).firstResult();
             assertNotNull(execution);
+            conversationExecutionId.set(execution.id.toString());
             assertEquals(UUID.fromString(workAccountId), execution.workAccountId);
             assertEquals("tax@example.com", execution.workAccountEmail);
             assertEquals("GST", execution.definition.type);
             assertEquals("NEW", execution.currentStatus.code);
+            assertEquals("GST filing", execution.emailSubject);
+            assertEquals("sender@example.com", execution.emailSender);
+            assertEquals(null, execution.emailContentHtml);
             Object processedAt = Panache.getEntityManager().createNativeQuery("""
                             SELECT work_item_processed_at
                             FROM work_account_conversation
@@ -208,6 +251,193 @@ class UserManagementResourceTest {
         });
         assertFalse(conversationWorkItemState.claimDue(
                 "work-item-instance-three", Instant.now().plusSeconds(1)).contains(conversationId));
+
+        UUID followUpConversationId = QuarkusTransaction.requiringNew().call(() -> {
+            WorkAccountEntity account = WorkAccountEntity.findById(UUID.fromString(workAccountId));
+            WorkAccountConversationEntity conversation = new WorkAccountConversationEntity();
+            conversation.tenant = account.tenant;
+            conversation.workAccount = account;
+            conversation.provider = account.provider;
+            conversation.providerMessageId = "gmail-" + UUID.randomUUID();
+            conversation.providerThreadId = "gmail-thread-1";
+            conversation.rfcMessageId = "<message-2@example.com>";
+            conversation.inReplyTo = "<message-1@example.com>";
+            conversation.referenceIds = "<message-1@example.com>";
+            conversation.direction = ConversationDirection.INBOUND;
+            conversation.subject = "Re: GST filing";
+            conversation.sender = "sender@example.com";
+            conversation.recipients = account.emailId;
+            conversation.contentText = "Here is the requested follow-up.";
+            conversation.contentHtml = "<p>Here is the requested <em>follow-up</em>.</p>";
+            conversation.sentAt = Instant.now().plusMillis(1);
+            conversation.receivedAt = Instant.now().plusMillis(1);
+            Panache.getEntityManager().persist(conversation);
+            WorkAccountConversationAttachmentEntity attachment =
+                    new WorkAccountConversationAttachmentEntity();
+            attachment.tenant = account.tenant;
+            attachment.conversation = conversation;
+            attachment.providerAttachmentId = "attachment-2";
+            attachment.filename = "gst-follow-up.txt";
+            attachment.contentType = "text/plain";
+            attachment.contentData = "follow-up-document".getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8);
+            attachment.contentSize = attachment.contentData.length;
+            attachment.createdAt = conversation.receivedAt;
+            Panache.getEntityManager().persist(attachment);
+            Panache.getEntityManager().flush();
+            return conversation.id;
+        });
+        assertTrue(conversationWorkItemState.claimDue(
+                "work-item-instance-four", Instant.now().plusSeconds(1))
+                .contains(followUpConversationId));
+        conversationWorkItemProcessor.createExecution(
+                followUpConversationId, "work-item-instance-four");
+        QuarkusTransaction.requiringNew().run(() -> {
+            WorkAccountConversationEntity followUp =
+                    WorkAccountConversationEntity.findById(followUpConversationId);
+            assertNotNull(followUp.workItemExecution);
+            assertEquals(conversationExecutionId.get(),
+                    followUp.workItemExecution.id.toString());
+            assertEquals(1L, WorkItemExecutionEntity.count(
+                    "workAccountId = ?1 and definition.type = ?2 and conversationId is not null",
+                    UUID.fromString(workAccountId), "GST"));
+        });
+
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(assignmentBody(
+                        adminTenantId, gstWorkItemId, gstInitialStatusId, null, adminUserId))
+                .when().post("/api/v1/work-items/assignments")
+                .then().statusCode(200);
+
+        Response emailWorkItem = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/work-items/executions/{executionId}",
+                        conversationExecutionId.get());
+        emailWorkItem.then().statusCode(200)
+                .body("execution.workItemNumber", org.hamcrest.Matchers.greaterThanOrEqualTo(100000))
+                .body("conversation.subject", equalTo("GST filing"))
+                .body("conversation.contentHtml", containsString("<strong>"))
+                .body("communications.size()", equalTo(2))
+                .body("communications.direction", hasItem("INBOUND"))
+                .body("communications.subject", hasItem("Re: GST filing"))
+                .body("documents.size()", equalTo(2))
+                .body("documents[0].filename", equalTo("gst-filing.pdf"))
+                .body("documents[0].origin", equalTo("INBOUND"))
+                .body("documents.sourceConversationId",
+                        hasItem(conversationId.toString()))
+                .body("documents.sourceConversationId",
+                        hasItem(followUpConversationId.toString()))
+                .body("internalNotes.size()", equalTo(0));
+        String documentId = emailWorkItem.jsonPath().getString("documents[0].id");
+
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/work-items/executions/{executionId}/documents/{documentId}",
+                        conversationExecutionId.get(), documentId)
+                .then().statusCode(200)
+                .header("Content-Disposition", containsString("gst-filing.pdf"))
+                .body(equalTo("test-pdf-content"));
+
+        QuarkusTransaction.requiringNew().run(() -> {
+            WorkItemExecutionEntity execution = WorkItemExecutionEntity.findById(
+                    UUID.fromString(conversationExecutionId.get()));
+            execution.conversationId = null;
+            Panache.getEntityManager().flush();
+            WorkAccountConversationEntity.delete(
+                    "id in ?1", List.of(conversationId, followUpConversationId));
+        });
+
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/work-items/executions/{executionId}",
+                        conversationExecutionId.get())
+                .then().statusCode(200)
+                .body("conversation.subject", equalTo("GST filing"))
+                .body("communications.size()", equalTo(2))
+                .body("communications.contentSource", hasItem("CACHE"))
+                .body("communications.subject", hasItem("Re: GST filing"))
+                .body("documents.size()", equalTo(2))
+                .body("documents.sourceConversationId",
+                        hasItem(conversationId.toString()))
+                .body("documents.sourceConversationId",
+                        hasItem(followUpConversationId.toString()));
+
+        UUID postPurgeConversationId = QuarkusTransaction.requiringNew().call(() -> {
+            WorkAccountEntity account = WorkAccountEntity.findById(UUID.fromString(workAccountId));
+            WorkAccountConversationEntity conversation = new WorkAccountConversationEntity();
+            conversation.tenant = account.tenant;
+            conversation.workAccount = account;
+            conversation.provider = account.provider;
+            conversation.providerMessageId = "gmail-" + UUID.randomUUID();
+            conversation.providerThreadId = "gmail-thread-1";
+            conversation.rfcMessageId = "<message-3@example.com>";
+            conversation.inReplyTo = "<message-2@example.com>";
+            conversation.referenceIds = "<message-1@example.com> <message-2@example.com>";
+            conversation.direction = ConversationDirection.INBOUND;
+            conversation.subject = "Re: GST filing";
+            conversation.sender = "sender@example.com";
+            conversation.recipients = account.emailId;
+            conversation.contentText = "This arrived after the materialized conversation was purged.";
+            conversation.contentHtml =
+                    "<p>This arrived after the materialized conversation was <strong>purged</strong>.</p>";
+            conversation.sentAt = Instant.now().plusMillis(2);
+            conversation.receivedAt = Instant.now().plusMillis(2);
+            Panache.getEntityManager().persist(conversation);
+            Panache.getEntityManager().flush();
+            return conversation.id;
+        });
+        assertTrue(conversationWorkItemState.claimDue(
+                "work-item-instance-five", Instant.now().plusSeconds(1))
+                .contains(postPurgeConversationId));
+        conversationWorkItemProcessor.createExecution(
+                postPurgeConversationId, "work-item-instance-five");
+        QuarkusTransaction.requiringNew().run(() -> {
+            WorkAccountConversationEntity postPurge =
+                    WorkAccountConversationEntity.findById(postPurgeConversationId);
+            assertNotNull(postPurge.workItemExecution);
+            assertEquals(conversationExecutionId.get(), postPurge.workItemExecution.id.toString());
+        });
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/work-items/executions/{executionId}",
+                        conversationExecutionId.get())
+                .then().statusCode(200)
+                .body("communications.size()", equalTo(3))
+                .body("communications.contentHtml",
+                        hasItem(containsString("after the materialized conversation")));
+
+        Response internalUpload = given()
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .multiPart("file", "internal-review.txt",
+                        "internal-team-document".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        "text/plain")
+                .when().post("/api/v1/work-items/executions/{executionId}/documents",
+                        conversationExecutionId.get());
+        internalUpload.then().statusCode(200)
+                .body("filename", equalTo("internal-review.txt"))
+                .body("origin", equalTo("INTERNAL"))
+                .body("uploadedByUsername", equalTo(admin.username()));
+        String internalDocumentId = internalUpload.jsonPath().getString("id");
+
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/work-items/executions/{executionId}/documents/{documentId}",
+                        conversationExecutionId.get(), internalDocumentId)
+                .then().statusCode(200)
+                .body(equalTo("internal-team-document"));
+
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(Map.of("content", "Reviewed internally; awaiting confirmation."))
+                .when().post("/api/v1/work-items/executions/{executionId}/notes",
+                        conversationExecutionId.get())
+                .then().statusCode(200)
+                .body("authorUsername", equalTo(admin.username()))
+                .body("content", containsString("Reviewed internally"));
+
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get("/api/v1/work-items/executions/{executionId}",
+                        conversationExecutionId.get())
+                .then().statusCode(200)
+                .body("internalNotes.size()", equalTo(1))
+                .body("documents.origin", hasItem("INTERNAL"))
+                .body("internalNotes[0].content", containsString("awaiting confirmation"));
 
         given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/work-accounts")
@@ -258,21 +488,42 @@ class UserManagementResourceTest {
                 .body(Map.of(
                         "companyCode", admin.companyCode(),
                         "username", "processor.user",
+                        "firstName", "Priya",
+                        "lastName", "Processor",
                         "temporaryPassword", "ProcessorTemp-123",
                         "role", "PROCESSOR"))
                 .when().post("/api/v1/users");
         created.then().statusCode(200)
                 .body("mustChangePassword", equalTo(true))
+                .body("firstName", equalTo("Priya"))
+                .body("lastName", equalTo("Processor"))
                 .body("role", equalTo("PROCESSOR"));
         String processorId = created.jsonPath().getString("id");
+
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(Map.of(
+                        "username", "processor.updated",
+                        "firstName", "Priyanka",
+                        "lastName", "Reviewer",
+                        "role", "BASE_USER",
+                        "active", true))
+                .when().put("/api/v1/users/{id}", processorId)
+                .then().statusCode(200)
+                .body("username", equalTo("processor.updated"))
+                .body("firstName", equalTo("Priyanka"))
+                .body("lastName", equalTo("Reviewer"))
+                .body("role", equalTo("BASE_USER"))
+                .body("active", equalTo(true));
 
         given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/users")
                 .then().statusCode(200)
-                .body("role", hasItem("PROCESSOR"));
+                .body("username", hasItem("processor.updated"))
+                .body("role", hasItem("BASE_USER"));
 
         String processorSession = login(
-                new Seed(admin.companyCode(), "processor.user"), "ProcessorTemp-123")
+                new Seed(admin.companyCode(), "processor.updated"), "ProcessorTemp-123")
                 .then().statusCode(200)
                 .extract().cookie(AuthResource.SESSION_COOKIE);
 
@@ -287,7 +538,7 @@ class UserManagementResourceTest {
                 .when().get("/api/v1/auth/me")
                 .then().statusCode(401);
 
-        login(new Seed(admin.companyCode(), "processor.user"), "ProcessorReset-456")
+        login(new Seed(admin.companyCode(), "processor.updated"), "ProcessorReset-456")
                 .then().statusCode(200)
                 .body("mustChangePassword", equalTo(true));
     }
@@ -298,6 +549,22 @@ class UserManagementResourceTest {
         String session = login(administrator, INITIAL_PASSWORD)
                 .then().statusCode(200)
                 .extract().cookie(AuthResource.SESSION_COOKIE);
+        String administratorId = given().cookie(AuthResource.SESSION_COOKIE, session)
+                .when().get("/api/v1/auth/me")
+                .then().statusCode(200)
+                .extract().path("id");
+
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, session)
+                .body(Map.of(
+                        "username", administrator.username(),
+                        "firstName", "Test",
+                        "lastName", "User",
+                        "role", "PROCESSOR",
+                        "active", true))
+                .when().put("/api/v1/users/{id}", administratorId)
+                .then().statusCode(400)
+                .body("error", containsString("own role"));
 
         given().cookie(AuthResource.SESSION_COOKIE, session)
                 .when().get("/api/v1/tenants")
@@ -320,6 +587,45 @@ class UserManagementResourceTest {
         given().cookie(AuthResource.SESSION_COOKIE, session)
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200).body("type", hasItem("INCOME_TAX"));
+    }
+
+    @Test
+    void workItemNumbersAreNumericSequencesScopedToEachTenant() {
+        Seed firstAdmin = seed(UserRole.ADMIN, false);
+        Seed secondAdmin = seed(UserRole.ADMIN, false);
+        String firstSession = login(firstAdmin, INITIAL_PASSWORD)
+                .then().statusCode(200).extract().cookie(AuthResource.SESSION_COOKIE);
+        String secondSession = login(secondAdmin, INITIAL_PASSWORD)
+                .then().statusCode(200).extract().cookie(AuthResource.SESSION_COOKIE);
+
+        UUID firstTenantId = tenantId(firstSession);
+        UUID secondTenantId = tenantId(secondSession);
+        String firstDefinitionId = incomeTaxDefinitionId(firstSession);
+        String secondDefinitionId = incomeTaxDefinitionId(secondSession);
+
+        UUID firstAccountId = createWorkAccount(
+                firstSession, firstTenantId, firstDefinitionId, "tenant-one-first@example.com");
+        UUID firstTenantSecondAccountId = createWorkAccount(
+                firstSession, firstTenantId, firstDefinitionId, "tenant-one-second@example.com");
+        UUID secondAccountId = createWorkAccount(
+                secondSession, secondTenantId, secondDefinitionId, "tenant-two-first@example.com");
+
+        QuarkusTransaction.requiringNew().run(() -> {
+            WorkItemExecutionEntity first = WorkItemExecutionEntity.find(
+                    "workAccountId = ?1 and conversationId is null", firstAccountId).firstResult();
+            WorkItemExecutionEntity firstTenantSecond = WorkItemExecutionEntity.find(
+                    "workAccountId = ?1 and conversationId is null",
+                    firstTenantSecondAccountId).firstResult();
+            WorkItemExecutionEntity second = WorkItemExecutionEntity.find(
+                    "workAccountId = ?1 and conversationId is null", secondAccountId).firstResult();
+
+            assertNotNull(first);
+            assertNotNull(firstTenantSecond);
+            assertNotNull(second);
+            assertEquals(100000L, first.workItemNumber);
+            assertEquals(100001L, firstTenantSecond.workItemNumber);
+            assertEquals(100000L, second.workItemNumber);
+        });
     }
 
     @Test
@@ -385,6 +691,7 @@ class UserManagementResourceTest {
 
         String processorId = given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .body(Map.of("companyCode", admin.companyCode(), "username", "workflow.processor",
+                        "firstName", "Workflow", "lastName", "Processor",
                         "temporaryPassword", "WorkflowTemp-123", "role", "PROCESSOR"))
                 .when().post("/api/v1/users").then().statusCode(200).extract().path("id");
 
@@ -426,9 +733,16 @@ class UserManagementResourceTest {
                 .body("sortBy", equalTo("email"))
                 .body("sortDirection", equalTo("asc"))
                 .body("items[0].emailId", equalTo("workflow@example.com"))
+                .body("items[0].workItemNumber", org.hamcrest.Matchers.greaterThanOrEqualTo(100000))
                 .body("items[0].currentStatus", equalTo("NEW"))
                 .body("items[0].allowedTransitions[0].id", equalTo(startTransitionId));
         String executionId = myWork.jsonPath().getString("items[0].id");
+
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .when().get("/api/v1/work-items/my-work/status-summary")
+                .then().statusCode(200)
+                .body("status", hasItem("NEW"))
+                .body("find { it.status == 'NEW' }.count", equalTo(1));
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .when().post("/api/v1/work-items/executions/{executionId}/transitions/{transitionId}",
@@ -468,6 +782,13 @@ class UserManagementResourceTest {
                 .body("items[0].terminal", equalTo(true));
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .queryParam("includeTerminal", true)
+                .when().get("/api/v1/work-items/my-work/status-summary")
+                .then().statusCode(200)
+                .body("status", hasItem("COMPLETED"))
+                .body("find { it.status == 'COMPLETED' }.count", equalTo(1));
+
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .when().get("/api/v1/work-items/executions/{executionId}", executionId)
                 .then().statusCode(200)
                 .body("execution.id", equalTo(executionId))
@@ -502,11 +823,22 @@ class UserManagementResourceTest {
                 .body(containsString("Company code"))
                 .body(containsString("Change password"))
                 .body(containsString("My work"))
+                .body(containsString("Filters and sorting"))
+                .body(containsString("my-work-status-summary"))
+                .body(containsString("navigate-administration"))
                 .body(containsString("Work item definitions"))
                 .body(containsString("Workflow assignments"))
                 .body(containsString("Work accounts"))
+                .body(containsString("First name"))
+                .body(containsString("Last name"))
+                .body(containsString("Edit user"))
                 .body(containsString("Include completed work"))
                 .body(containsString("work-item-detail"))
+                .body(containsString("Documents"))
+                .body(containsString("Internal notes"))
+                .body(containsString("Reply to sender"))
+                .body(containsString("work-reply-files"))
+                .body(containsString("work-reply-editor"))
                 .body(containsString("/assets/casiq-logo.png"));
 
         given().when().get("/gmail/")
@@ -522,6 +854,34 @@ class UserManagementResourceTest {
         return given().contentType(ContentType.JSON)
                 .body(loginBody(seed, password))
                 .when().post("/api/v1/auth/login");
+    }
+
+    private UUID tenantId(String session) {
+        return UUID.fromString(given().cookie(AuthResource.SESSION_COOKIE, session)
+                .when().get("/api/v1/auth/me")
+                .then().statusCode(200)
+                .extract().path("tenantId"));
+    }
+
+    private String incomeTaxDefinitionId(String session) {
+        return given().cookie(AuthResource.SESSION_COOKIE, session)
+                .when().get("/api/v1/work-items/effective")
+                .then().statusCode(200)
+                .extract().path("find { it.type == 'INCOME_TAX' }.id");
+    }
+
+    private UUID createWorkAccount(
+            String session, UUID tenantId, String definitionId, String email) {
+        return UUID.fromString(given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, session)
+                .body(Map.of(
+                        "tenantId", tenantId.toString(),
+                        "emailId", email,
+                        "provider", "GOOGLE",
+                        "workItemId", definitionId))
+                .when().post("/api/v1/work-accounts")
+                .then().statusCode(200)
+                .extract().path("id"));
     }
 
     private Map<String, String> loginBody(Seed seed, String password) {
@@ -577,6 +937,8 @@ class UserManagementResourceTest {
             user.tenant = tenant;
             user.username = username;
             user.normalizedUsername = username.toLowerCase();
+            user.firstName = "Test";
+            user.lastName = "User";
             user.passwordHash = passwords.hash(INITIAL_PASSWORD);
             user.role = role;
             user.mustChangePassword = mustChangePassword;

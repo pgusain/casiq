@@ -13,6 +13,14 @@ public interface EmailProviderConnector {
 
     PollResult fetch(PollRequest request);
 
+    default ReadResult read(ReadRequest request) {
+        throw new UnsupportedOperationException(providerCode() + " does not support direct message reads");
+    }
+
+    default ReplyResult reply(ReplyRequest request) {
+        throw new UnsupportedOperationException(providerCode() + " does not support replies");
+    }
+
     record PollRequest(
             UUID workAccountId,
             String emailId,
@@ -29,6 +37,20 @@ public interface EmailProviderConnector {
             String refreshToken) {
     }
 
+    record ReadRequest(
+            UUID workAccountId,
+            String emailId,
+            String refreshToken,
+            String accessToken,
+            Instant accessTokenExpiresAt,
+            String providerMessageId) {}
+
+    record ReadResult(
+            EmailMessage message,
+            String accessToken,
+            Instant accessTokenExpiresAt,
+            String refreshToken) {}
+
     record EmailMessage(
             String providerMessageId,
             String providerThreadId,
@@ -42,6 +64,42 @@ public interface EmailProviderConnector {
             String snippet,
             String payloadJson,
             String contentText,
-            String contentHtml) {
+            String contentHtml,
+            List<EmailAttachment> attachments) {
+    }
+
+    record EmailAttachment(
+            String providerAttachmentId,
+            String filename,
+            String contentType,
+            byte[] content) {
+    }
+
+    record ReplyRequest(
+            UUID workAccountId,
+            String emailId,
+            String refreshToken,
+            String accessToken,
+            Instant accessTokenExpiresAt,
+            String recipient,
+            String subject,
+            String providerThreadId,
+            String inReplyTo,
+            String referenceIds,
+            String htmlBody,
+            List<OutgoingAttachment> attachments) {
+    }
+
+    record OutgoingAttachment(
+            UUID documentId,
+            String filename,
+            String contentType,
+            byte[] content) {}
+
+    record ReplyResult(
+            EmailMessage message,
+            String accessToken,
+            Instant accessTokenExpiresAt,
+            String refreshToken) {
     }
 }

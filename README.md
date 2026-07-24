@@ -9,6 +9,7 @@ the Gmail account connector.
 | Module | Responsibility |
 | --- | --- |
 | `casiq` | Top-level Maven aggregator, dependency management, and root Flyway configuration |
+| `attachment-storage` | Pluggable tenant-scoped attachment storage with local-disk and Amazon S3 implementations |
 | `casiq-application` | The only runnable Quarkus application; assembles all feature modules and owns runtime configuration |
 | `user-management` | Pluggable backend library containing company login, roles, password management, sessions, and user APIs |
 | `work-item-management` | Pluggable work-item definition library containing tenant inheritance, status graphs, validation, and APIs |
@@ -22,10 +23,11 @@ runtime. `casiq-application` packages them into one application on port `8080`.
 
 ## User-management deployment
 
-The schema and initial administrator are installed by root-level Flyway migration
-`V2__create_tenants_users_and_initial_admin.sql`. The runnable application packages
-the root migrations and automatically applies pending migrations during startup,
-including table creation on a new database. Set these values before the first run:
+The complete schema, reference data, starter workflows, and initial administrator
+are installed by the consolidated root-level Flyway migration
+`V1__baseline.sql`. It is intended for a new, empty database. The runnable
+application packages and automatically applies it during startup. Set these values
+before the first run:
 
 ```bash
 cp .env.example .env
@@ -81,6 +83,10 @@ Roles are:
 An administrator reset sets a new temporary bcrypt password, marks the target for
 mandatory password replacement, and revokes all of that target user's sessions.
 Administrators change their own passwords through the normal current-user flow.
+The user editor updates username, first name, last name, role, and active status
+within the administrator's tenant scope. Login-affecting changes revoke the
+target user's sessions. Administrators cannot change their own role or deactivate
+themselves, and the application preserves at least one active `GLOBAL_ADMIN`.
 
 ### User-management API
 
@@ -92,6 +98,7 @@ Administrators change their own passwords through the normal current-user flow.
 | `POST /api/v1/auth/logout` | Revoke the current session |
 | `GET /api/v1/users` | List users in the administrator's allowed scope |
 | `POST /api/v1/users` | Create a user with a temporary password |
+| `PUT /api/v1/users/{id}` | Edit a user's identity, role, and active status |
 | `POST /api/v1/users/{id}/reset-password` | Reset another user's password |
 | `GET /api/v1/tenants` | List tenants (`GLOBAL_ADMIN` only) |
 | `POST /api/v1/tenants` | Create a tenant (`GLOBAL_ADMIN` only) |
@@ -104,8 +111,13 @@ Administrators change their own passwords through the normal current-user flow.
 | `POST /api/v1/work-items/assignments` | Assign a status or transition to a user in the same tenant |
 | `DELETE /api/v1/work-items/assignments/{type}/{id}` | Remove a status or transition assignment |
 | `GET /api/v1/work-items/my-work` | Page and sort assigned non-terminal work, with type, status, email, and completed-work filters |
-| `GET /api/v1/work-items/executions/{id}` | Open an assigned work item with its linked email content and activity history |
+| `GET /api/v1/work-items/my-work/status-summary` | Count all accessible work items by status for the current filters |
+| `GET /api/v1/work-items/executions/{id}` | Open an assigned work item with its complete inbound/outbound communication timeline |
+| `POST /api/v1/work-items/executions/{id}/notes` | Add a tenant-internal note to an assigned work item |
+| `POST /api/v1/work-items/executions/{id}/documents` | Upload an internal-team document as multipart form data |
+| `GET /api/v1/work-items/executions/{id}/documents/{documentId}` | Download an authorized work-item attachment |
 | `POST /api/v1/work-items/executions/{id}/transitions/{transitionId}` | Perform an assigned transition |
+| `POST /api/v1/work-item-replies/{id}` | Reply to the original sender through the work account provider |
 | `GET /api/v1/work-accounts` | List work accounts in the administrator's tenant scope |
 | `POST /api/v1/work-accounts` | Add an email work account mapped to an effective work-item definition |
 | `PUT /api/v1/work-accounts/{id}` | Edit an email or work-item mapping |
@@ -117,9 +129,9 @@ is running.
 
 ## Work-item graphs
 
-Flyway migration `V5__create_work_item_graphs.sql` creates definition, status-node,
-and directed-transition tables and migrates existing work accounts to definition
-foreign keys. It also provides CASIQ-wide `INCOME_TAX` and `GST` starter graphs.
+The consolidated baseline creates definition, status-node, and
+directed-transition tables. It also provides CASIQ-wide `INCOME_TAX` and `GST`
+starter graphs.
 
 A CASIQ-wide definition is available to every tenant. A tenant definition with the
 same type is an override and shadows the CASIQ-wide version only for that tenant.
@@ -129,8 +141,8 @@ and every node must be reachable from the initial node. The authenticated dashbo
 contains the global-admin graph editor and uses effective definitions in the
 work-account dropdown.
 
-Flyway migration `V6__create_work_item_executions_and_assignments.sql` gives each
-work account an independent current workflow status. Tenant administrators can
+Work-item execution and assignment tables give each work account an independent
+current workflow status. Tenant administrators can
 assign an entire status or one specific transition to an active user in the same
 tenant. Status ownership permits every outgoing transition from that status;
 transition ownership permits only the assigned activity. Every completed transition
@@ -148,9 +160,10 @@ http://localhost:8080/api/v1/gmail/callback
 
 Set the three `GOOGLE_*` values in `.env` before starting the same application.
 The Gmail page at <http://localhost:8080/gmail/> is the OAuth test console. It requests
-`openid`, `email`, `profile`, and Gmail read-only permission, with offline consent
-so Google can return a refresh token. OAuth state and PKCE verifiers currently live
-in memory for ten minutes; returned tokens are shown only in the test page.
+`openid`, `email`, `profile`, Gmail read-only, and Gmail send permission, with offline
+consent so Google can return a refresh token. Existing Google work accounts must be
+reconnected once to grant the send scope. OAuth state and PKCE verifiers currently
+live in memory for ten minutes; returned tokens are shown only in the test page.
 
 The main authenticated UI also connects Google directly to a work account. That flow
 uses Gmail `users.getProfile("me")` to verify the selected Google mailbox matches the
@@ -158,8 +171,8 @@ configured email, then stores the access token, refresh token, and access-token 
 server-side. Work-account API responses expose connection status and expiry, never the
 stored token values. Changing a work account's email clears its prior connection.
 
-Flyway migration `V7__add_email_providers_and_polling_config.sql` provides the
-`GOOGLE` and `MICROSOFT` reference values. The durable `work_account` row stores
+The baseline provides the `GOOGLE` and `MICROSOFT` reference values. The durable
+`work_account` row stores
 the email, provider, and refresh token; short-lived access tokens are stored in the
 one-to-one `email_polling_config` row with their expiry and next-refresh timestamp.
 Changing the email or provider clears both credential states. Google routes to the
@@ -168,8 +181,8 @@ not-configured response until its connector is implemented.
 
 ### Incremental email polling
 
-Flyway migration `V8__add_email_polling_leases_and_conversations.sql` adds polling
-cursors and expiring leases to `email_polling_config`, plus the
+The baseline includes polling cursors and expiring leases in
+`email_polling_config`, plus the
 `work_account_conversation` table. Each scheduler pass atomically claims at most
 `EMAIL_POLLING_BATCH_SIZE` due configurations using `FOR UPDATE SKIP LOCKED` and
 sets a lease for `EMAIL_POLLING_LOCK_SECONDS`. This prevents another application
@@ -186,10 +199,12 @@ idempotent. Successful polls advance `last_polled_at` and `next_refresh_at`;
 failures release the lease, record the error, and schedule a configured retry.
 Polling limits, intervals, and initial lookback are configured through the
 `EMAIL_POLLING_*` values; Gmail's page size uses `GMAIL_POLLING_PAGE_SIZE` in
-`.env.example`.
+`.env.example`. Gmail attachments are downloaded through the provider connector and
+stored with the source conversation. `GMAIL_MAX_ATTACHMENT_BYTES` bounds each
+attachment (25 MiB by default) so one message cannot consume unbounded worker memory.
 
-Flyway migration `V9__add_conversation_reply_metadata.sql` adds the RFC
-`Message-ID`, `In-Reply-To`, and `References` headers as dedicated conversation
+The conversation schema stores the RFC `Message-ID`, `In-Reply-To`, and
+`References` headers as dedicated conversation
 columns. It also records each message as `INBOUND` or `OUTBOUND`, allowing replies
 to be linked to the provider thread without parsing the stored JSON payload.
 
@@ -201,8 +216,8 @@ account email, uses the definition currently linked to that account, and starts 
 execution at the definition's initial status. The execution has a unique
 `conversation_id`, providing database-level idempotency.
 
-Flyway migration `V10__create_conversation_work_item_pipeline.sql` adds processing,
-lease, retry, and error state to `work_account_conversation`. Each scheduler pass
+Processing, lease, retry, and error state are part of
+`work_account_conversation`. Each scheduler pass
 claims at most `CONVERSATION_WORK_ITEM_BATCH_SIZE` records with
 `FOR UPDATE SKIP LOCKED`, applies an expiring lease, and submits them to a dedicated
 10-thread worker pool. Failed records are released and delayed until the configured
@@ -213,14 +228,97 @@ The My Work screen excludes terminal statuses by default. Users can filter by
 work-item type, current status, or work-account email prefix and can explicitly include
 completed work. Results support page sizes from 1 to 100 and sorting by last
 update, creation time, email, work-item type, or status in either direction.
+Work items are displayed on a dedicated screen as a row-based list. Its filter
+panel is collapsible, and status summary tiles count the complete accessible
+queue rather than only the current page; selecting a tile applies that status.
+Each execution has a tenant-scoped numeric work-item number. Numbering starts at
+`100000` independently for each tenant. The list shows that number and a
+15-character email-subject preview; the number is also shown when the work item
+is opened.
 Opening a work item displays its linked email and provides the currently assigned
 transitions; the queue card also provides quick transition shortcuts. Gmail
-plain-text and HTML bodies are normalized to a safe HTML representation
-into columns added by `V11__add_conversation_rendered_content.sql`; HTML is rendered
-inside a sandboxed, network-blocked frame.
+plain-text and HTML bodies are normalized to a safe HTML representation in the
+conversation schema; HTML is rendered inside a sandboxed, network-blocked frame.
 
-Flyway migration `V12__optimize_polling_and_work_item_queries.sql` adds composite
-indexes for tenant work queues, definition/status filters, normalized work-account
+The durable work-item communication ledger retains provider and addressing
+metadata without permanently copying the message body onto the execution. Email
+attachments are copied to tenant-scoped work-item documents,
+so authorized users can list and download them from the document sidebar. Work items
+also support multiple ordered internal notes with author and timestamp metadata.
+
+The same detail dialog contains a formatting toolbar and HTML reply editor. Users
+can select existing work-item documents or upload new files directly to attach
+to the reply. A reply
+is routed through the work account's `EmailProviderConnector`; Gmail creates a raw
+multipart MIME message with the original `Message-ID`, `References`, and provider
+thread ID. Sent messages are persisted as `OUTBOUND` conversations and appear in
+the work-item communication timeline. Outbound attachments are recorded as
+`OUTBOUND` work-item documents and appear in the document side panel. The
+communication timeline is collapsed by default except for its newest message.
+Each request supplies
+an `outbound_request_id`, and a pessimistic per-account lock plus the unique request
+constraint makes client retries idempotent.
+
+Attachment filenames and MIME types use provider-safe lengths. Gmail's opaque
+attachment IDs are converted to deterministic SHA-256 storage keys before
+persistence, preventing provider-controlled identifiers from exceeding indexed
+database column limits while preserving attachment idempotency.
+
+Every inbound or outbound conversation is linked to its work-item execution. A
+later inbound
+email with the same provider thread ID and work account is attached to the existing
+work item instead of creating a duplicate. Work-item documents are classified as
+`INBOUND`, `INTERNAL`, or `OUTBOUND`; the UI groups them by that origin. Inbound
+and outbound documents retain their source conversation ID, so every email in the
+timeline displays its corresponding downloadable attachments. The document side
+sheet also identifies the linked email subject. Internal uploads remain
+work-item-level documents without an email link. Inbound email attachments and
+internal uploads are stored through the `attachment-storage` module, while
+outbound document rows record exactly which files were sent.
+
+Local development defaults to `ATTACHMENT_STORAGE_PROVIDER=local` and stores files
+below `ATTACHMENT_LOCAL_ROOT`, partitioned by tenant ID. For production, build and
+run with `ATTACHMENT_STORAGE_PROVIDER=s3`. S3 mode derives a separate bucket name
+for every tenant as `<ATTACHMENT_S3_BUCKET_PREFIX><tenant UUID>`. Provision those
+buckets before use and grant the application `s3:PutObject` and `s3:GetObject`
+only for the applicable tenant buckets. The S3 client reads `AWS_REGION` and uses
+the AWS SDK default credential provider chain; static cloud credentials are not
+stored in Casiq configuration.
+
+Application users include first and last names. Both values are required when
+administrators create new users and are
+returned by the authentication and user-management APIs for navigation, profiles,
+assignments, and user lists.
+
+Every work-item execution has a database-backed numeric identifier unique within
+its tenant. New values are allocated numerically per tenant under a
+database tenant-row lock, keeping allocation safe across concurrent application
+instances.
+
+The durable `work_item_communication` metadata ledger lets work items retain provider
+message/thread identifiers, addressing metadata, timestamps, attachment links,
+and reply headers without depending on the materialized
+`work_account_conversation` row. Opening a work item reads the materialized body
+from `work_account_conversation` first. If that row is no longer available, the
+message is read directly from its configured provider. A short-lived body cache
+is the final fallback; if both sources are temporarily unavailable, the most
+recent cached body is returned as visibly marked stale content.
+If a retained conversation exists but has no HTML body, Casiq downloads the full
+provider message, hydrates `content_html`, and renders that HTML in the sandboxed
+work-item communication frame.
+
+The retention scheduler deletes processed materialized conversations after
+`CONVERSATION_RETENTION_HOURS` (180 days by default), in bounded batches using
+database row locks and `SKIP LOCKED` so multiple application instances can run it
+safely. Cached bodies are cleared after `WORK_ITEM_CACHE_FALLBACK_HOURS`.
+Provider message IDs remain in the durable ledger, preventing an old message from
+being ingested again after its materialized row has been purged. New messages on
+an existing provider thread continue to attach to the original work item.
+Set `WORK_ITEM_PROVIDER_READ_ENABLED=false` to use metadata/cache only, or
+`CONVERSATION_RETENTION_ENABLED=false` to disable automatic purging.
+
+The consolidated baseline includes composite indexes for tenant work queues,
+definition/status filters, normalized work-account
 email lookup, initial-status resolution, assignments, and activity ownership. It
 also stores a normalized execution email so filtering does not require a database
 function on every row.

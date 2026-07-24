@@ -23,7 +23,8 @@ import java.util.UUID;
 @ApplicationScoped
 public class GmailOAuthService {
     private static final String SCOPE =
-            "openid email profile https://www.googleapis.com/auth/gmail.readonly";
+            "openid email profile https://www.googleapis.com/auth/gmail.readonly "
+                    + "https://www.googleapis.com/auth/gmail.send";
 
     @ConfigProperty(name = "casiq.google.client-id") String clientId;
     @ConfigProperty(name = "casiq.google.client-secret") String clientSecret;

@@ -14,17 +14,24 @@
   <main class="shell">
     <nav>
       <a class="brand" href="/" aria-label="Casiq home"><img class="brand-logo" src="/assets/casiq-logo.png" alt="Casiq"></a>
-      <div id="account-menu" class="account-menu hidden"><span id="account-name"></span><button id="logout" class="quiet">Sign out</button></div>
+      <div id="account-menu" class="account-menu hidden">
+        <div class="workspace-navigation">
+          <button id="navigate-work-items" class="workspace-navigation-button active" type="button">Work items</button>
+          <button id="navigate-administration" class="workspace-navigation-button hidden" type="button">Administration</button>
+        </div>
+        <span id="account-name"></span>
+        <button id="logout" class="quiet">Sign out</button>
+      </div>
     </nav>
 
     <section id="login-view" class="login-layout hidden">
       <div class="intro">
-        <p class="eyebrow">WORK ACCOUNT ACCESS</p>
-        <h1>One secure identity<br><span>for every workspace.</span></h1>
+        <p class="eyebrow">WORK SPACE ACCESS</p>
+        <h1>One platform for all<br><span>your action items</span></h1>
         <p>Use your company code and account credentials to continue.</p>
       </div>
       <form id="login-form" class="card auth-card">
-        <div class="card-heading"><span class="lock">⌁</span><div><h2>Welcome back</h2><p>Sign in to your Casiq workspace</p></div></div>
+        <div class="card-heading"><span class="lock">⌁</span><div><h2>Welcome back</h2><p>Sign in to your casIQ workspace</p></div></div>
         <label>Company code<input id="company-code" autocomplete="organization" required maxlength="64" placeholder="ACME"></label>
         <label>Username<input id="username" autocomplete="username" required maxlength="128" placeholder="jane.doe"></label>
         <label>Password<input id="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Your password"></label>
@@ -48,33 +55,43 @@
 
     <section id="dashboard" class="dashboard hidden">
       <header class="page-header">
-        <div><p class="eyebrow">USER MANAGEMENT</p><h1>Workspace access</h1><p id="workspace-label"></p></div>
+        <div><p id="page-eyebrow" class="eyebrow">WORK ITEM MANAGEMENT</p><h1 id="page-title">My work items</h1><p id="workspace-label"></p></div>
         <span id="role-badge" class="role-badge"></span>
       </header>
       <div id="notice" class="notice hidden"></div>
 
-      <section id="my-work-panel" class="my-work-panel">
-        <div class="section-heading"><div><h2>My work</h2><p>Work accounts waiting for an activity assigned to you.</p></div><button id="refresh-my-work" class="quiet">Refresh</button></div>
-        <form id="my-work-filters" class="card work-filter-form">
-          <label>Work-item type<input id="my-work-type" maxlength="64" placeholder="e.g. GST"></label>
-          <label>Status<input id="my-work-status" maxlength="64" placeholder="e.g. NEW"></label>
-          <label>Work-account email<input id="my-work-email" type="search" maxlength="320" placeholder="Email starts with"></label>
-          <label>Sort by<select id="my-work-sort"><option value="updatedAt">Last updated</option><option value="createdAt">Created</option><option value="email">Email</option><option value="workItemType">Work-item type</option><option value="status">Status</option></select></label>
-          <label>Direction<select id="my-work-direction"><option value="desc">Descending</option><option value="asc">Ascending</option></select></label>
-          <label>Page size<select id="my-work-size"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option></select></label>
-          <label class="check-field"><input id="my-work-terminal" type="checkbox"><span>Include completed work</span></label>
-          <button class="primary compact" type="submit">Apply filters</button>
-          <button id="clear-my-work-filters" class="quiet" type="button">Clear</button>
-        </form>
-        <div id="my-work" class="workflow-list"></div>
-        <div id="my-work-pagination" class="pagination-bar hidden">
-          <button id="my-work-previous" class="quiet" type="button">← Previous</button>
-          <span id="my-work-page-label"></span>
-          <button id="my-work-next" class="quiet" type="button">Next →</button>
-        </div>
+      <section id="work-items-screen">
+        <section id="my-work-panel" class="my-work-panel">
+          <div class="section-heading"><div><h2>Assigned work</h2><p>Work items waiting for an activity assigned to you.</p></div><button id="refresh-my-work" class="quiet">Refresh</button></div>
+          <div id="my-work-status-summary" class="work-status-summary" aria-label="Work item counts by status"></div>
+          <details id="my-work-filter-panel" class="filter-panel">
+            <summary>Filters and sorting</summary>
+            <form id="my-work-filters" class="card work-filter-form">
+              <label>Work-item type<select id="my-work-type"><option value="">All work-item types</option></select></label>
+              <label>Status<input id="my-work-status" maxlength="64" placeholder="e.g. NEW"></label>
+              <label>Work-account email<input id="my-work-email" type="search" maxlength="320" placeholder="Email starts with"></label>
+              <label>Sort by<select id="my-work-sort"><option value="updatedAt">Last updated</option><option value="createdAt">Created</option><option value="email">Email</option><option value="workItemType">Work-item type</option><option value="status">Status</option></select></label>
+              <label>Direction<select id="my-work-direction"><option value="desc">Descending</option><option value="asc">Ascending</option></select></label>
+              <label>Page size<select id="my-work-size"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option></select></label>
+              <label class="check-field"><input id="my-work-terminal" type="checkbox"><span>Include completed work</span></label>
+              <button class="primary compact" type="submit">Apply filters</button>
+              <button id="clear-my-work-filters" class="quiet" type="button">Clear</button>
+            </form>
+          </details>
+          <div class="work-list-header" aria-hidden="true">
+            <span>Number</span><span>Subject</span><span>Sender</span><span>Work item</span><span>Status</span><span>Last updated</span><span>Actions</span>
+          </div>
+          <div id="my-work" class="workflow-list"></div>
+          <div id="my-work-pagination" class="pagination-bar hidden">
+            <button id="my-work-previous" class="quiet" type="button">← Previous</button>
+            <span id="my-work-page-label"></span>
+            <button id="my-work-next" class="quiet" type="button">Next →</button>
+          </div>
+        </section>
       </section>
 
-      <div class="dashboard-grid">
+      <section id="administration-screen" class="hidden">
+        <div class="dashboard-grid">
         <section id="admin-panel" class="main-column hidden">
           <section id="tenant-panel" class="tenant-panel hidden">
             <div class="section-heading"><div><h2>Tenants</h2><p>Create companies and maintain their login codes.</p></div><button id="show-tenant-form" class="primary compact">Add tenant</button></div>
@@ -149,17 +166,33 @@
             <div id="work-accounts" class="user-list"></div>
           </section>
 
-          <div id="users-heading" class="section-heading"><div><h2>Users</h2><p>Create accounts and reset temporary passwords.</p></div><button id="show-create" class="primary compact">Add user</button></div>
+          <div id="users-heading" class="section-heading"><div><h2>Users</h2><p>Create and edit accounts or reset temporary passwords.</p></div><button id="show-create" class="primary compact">Add user</button></div>
           <form id="create-user-form" class="card inline-form hidden">
             <div class="form-title"><strong>Create user</strong><button type="button" id="cancel-create" class="quiet">Cancel</button></div>
             <div class="form-grid">
               <label id="company-field">Company code<input id="new-company-code" maxlength="64"></label>
               <label>Username<input id="new-username" required maxlength="128"></label>
+              <label>First name<input id="new-first-name" required maxlength="128" autocomplete="given-name"></label>
+              <label>Last name<input id="new-last-name" required maxlength="128" autocomplete="family-name"></label>
               <label>Role<select id="new-role" required></select></label>
               <label>Temporary password<input id="new-temporary-password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label>
             </div>
             <p id="create-error" class="error hidden"></p>
             <button class="primary compact" type="submit">Create account</button>
+          </form>
+          <form id="edit-user-form" class="card inline-form hidden">
+            <input id="edit-user-id" type="hidden">
+            <div class="form-title"><strong>Edit user</strong><button type="button" id="cancel-edit-user" class="quiet">Cancel</button></div>
+            <div class="form-grid">
+              <label>Company code<input id="edit-company-code" readonly></label>
+              <label>Username<input id="edit-username" required maxlength="128"></label>
+              <label>First name<input id="edit-first-name" required maxlength="128" autocomplete="given-name"></label>
+              <label>Last name<input id="edit-last-name" required maxlength="128" autocomplete="family-name"></label>
+              <label>Role<select id="edit-role" required></select></label>
+              <label class="check-field"><input id="edit-user-active" type="checkbox"><span>User is active and may sign in</span></label>
+            </div>
+            <p id="edit-user-error" class="error hidden"></p>
+            <button class="primary compact" type="submit">Save changes</button>
           </form>
           <div id="users" class="user-list"></div>
         </section>
@@ -178,15 +211,65 @@
             <button class="secondary" type="submit">Change password</button>
           </form>
         </aside>
-      </div>
+        </div>
+      </section>
     </section>
     <dialog id="work-item-detail" class="work-item-dialog">
       <form method="dialog" class="dialog-close"><button class="quiet" aria-label="Close work item">Close</button></form>
       <p class="eyebrow">WORK ITEM</p>
       <h2 id="work-detail-title"></h2>
       <div id="work-detail-meta" class="email-meta"></div>
-      <pre id="work-detail-text" class="email-content"></pre>
-      <iframe id="work-detail-html" class="email-content-frame hidden" sandbox title="Email content"></iframe>
+      <div class="work-detail-layout">
+        <section class="work-detail-main">
+          <h3>Communication history</h3>
+          <div id="work-communications" class="communication-list"></div>
+
+          <section id="work-reply-section" class="reply-section hidden">
+            <h3>Reply to sender</h3>
+            <div class="editor-toolbar" role="toolbar" aria-label="Reply formatting">
+              <button type="button" data-command="bold" title="Bold"><strong>B</strong></button>
+              <button type="button" data-command="italic" title="Italic"><em>I</em></button>
+              <button type="button" data-command="underline" title="Underline"><u>U</u></button>
+              <button type="button" data-command="insertUnorderedList" title="Bulleted list">• List</button>
+              <button type="button" data-command="insertOrderedList" title="Numbered list">1. List</button>
+              <button type="button" data-command="createLink" title="Add link">Link</button>
+              <button type="button" data-command="removeFormat" title="Clear formatting">Clear</button>
+            </div>
+            <div id="work-reply-editor" class="wysiwyg-editor" contenteditable="true"
+                 role="textbox" aria-multiline="true" data-placeholder="Write a reply…"></div>
+            <label class="reply-file-field">Add files to this email
+              <input id="work-reply-files" type="file" multiple>
+            </label>
+            <div id="work-reply-attachments" class="reply-attachment-summary"></div>
+            <p id="work-reply-error" class="error hidden"></p>
+            <button id="send-work-reply" class="primary compact" type="button">Send reply</button>
+          </section>
+        </section>
+
+        <aside class="work-detail-side">
+          <section>
+            <h3>Documents</h3>
+            <div id="work-detail-documents" class="document-list"></div>
+            <form id="work-document-form">
+              <label for="work-document-file">Add internal document</label>
+              <input id="work-document-file" name="file" type="file" required>
+              <p id="work-document-error" class="error hidden"></p>
+              <button class="secondary compact" type="submit">Upload document</button>
+            </form>
+          </section>
+          <section>
+            <h3>Internal notes</h3>
+            <div id="work-detail-notes" class="internal-note-list"></div>
+            <form id="work-note-form">
+              <label for="work-note-content">Add a note</label>
+              <textarea id="work-note-content" required maxlength="10000" rows="4"
+                        placeholder="Visible only to your tenant"></textarea>
+              <p id="work-note-error" class="error hidden"></p>
+              <button class="secondary compact" type="submit">Add internal note</button>
+            </form>
+          </section>
+        </aside>
+      </div>
       <div id="work-detail-actions" class="workflow-actions detail-actions"></div>
       <div id="work-detail-history" class="activity-history"></div>
     </dialog>

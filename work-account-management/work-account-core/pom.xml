@@ -9,6 +9,7 @@
   <artifactId>work-account-core</artifactId>
 
   <dependencies>
+    <dependency><groupId>com.casiq</groupId><artifactId>attachment-storage</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.casiq</groupId><artifactId>user-management</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.casiq</groupId><artifactId>work-item-management</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-arc</artifactId></dependency>

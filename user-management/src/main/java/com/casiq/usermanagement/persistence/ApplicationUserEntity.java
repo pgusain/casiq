@@ -25,6 +25,8 @@ public class ApplicationUserEntity extends PanacheEntityBase {
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id") public TenantEntity tenant;
     @Column(nullable = false, length = 128) public String username;
     @Column(name = "normalized_username", nullable = false, length = 128) public String normalizedUsername;
+    @Column(name = "first_name", nullable = false, length = 128) public String firstName;
+    @Column(name = "last_name", nullable = false, length = 128) public String lastName;
     @Column(name = "password_hash", nullable = false, length = 100) public String passwordHash;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 32) public UserRole role;
     @Column(name = "must_change_password", nullable = false) public boolean mustChangePassword;

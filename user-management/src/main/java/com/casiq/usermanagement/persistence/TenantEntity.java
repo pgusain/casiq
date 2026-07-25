@@ -8,12 +8,11 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "tenant")
 public class TenantEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @Column(name = "company_code", nullable = false, length = 64) public String companyCode;
     @Column(name = "normalized_company_code", nullable = false, unique = true, length = 64) public String normalizedCompanyCode;
     @Column(name = "display_name", nullable = false, length = 160) public String displayName;

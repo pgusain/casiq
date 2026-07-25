@@ -2,7 +2,6 @@ package com.casiq.workaccount.core.polling;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Provider boundary used by the core polling workflow. Connector modules implement
@@ -22,7 +21,7 @@ public interface EmailProviderConnector {
     }
 
     record PollRequest(
-            UUID workAccountId,
+            Long workAccountId,
             String emailId,
             String refreshToken,
             String accessToken,
@@ -38,7 +37,7 @@ public interface EmailProviderConnector {
     }
 
     record ReadRequest(
-            UUID workAccountId,
+            Long workAccountId,
             String emailId,
             String refreshToken,
             String accessToken,
@@ -76,7 +75,7 @@ public interface EmailProviderConnector {
     }
 
     record ReplyRequest(
-            UUID workAccountId,
+            Long workAccountId,
             String emailId,
             String refreshToken,
             String accessToken,
@@ -91,7 +90,7 @@ public interface EmailProviderConnector {
     }
 
     record OutgoingAttachment(
-            UUID documentId,
+            Long documentId,
             String filename,
             String contentType,
             byte[] content) {}

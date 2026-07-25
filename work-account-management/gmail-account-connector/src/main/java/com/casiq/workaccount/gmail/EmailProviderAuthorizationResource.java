@@ -5,7 +5,6 @@ import com.casiq.workaccount.core.service.WorkAccountService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
-import java.util.UUID;
 
 @Path("/api/v1/work-accounts")
 @Produces(MediaType.APPLICATION_JSON)
@@ -17,7 +16,7 @@ public class EmailProviderAuthorizationResource {
     @Path("/{id}/authorize")
     public GmailOAuthService.AuthorizationResponse authorize(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("id") UUID id) {
+            @PathParam("id") Long id) {
         WorkAccountService.WorkAccountTarget account = workAccounts.requireManageable(token, id);
         return switch (account.provider()) {
             case "GOOGLE" -> gmail.beginAuthorization(account.id(), account.emailId());

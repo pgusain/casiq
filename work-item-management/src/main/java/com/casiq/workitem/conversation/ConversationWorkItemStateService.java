@@ -8,7 +8,6 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 @ApplicationScoped
 public class ConversationWorkItemStateService {
@@ -18,7 +17,7 @@ public class ConversationWorkItemStateService {
     @ConfigProperty(name = "casiq.conversation-work-item.retry-delay-seconds") long retryDelaySeconds;
 
     @Transactional
-    public List<UUID> claimDue(String owner, Instant now) {
+    public List<Long> claimDue(String owner, Instant now) {
         int limit = Math.max(1, Math.min(batchSize, 1000));
         @SuppressWarnings("unchecked")
         List<String> rawIds = Panache.getEntityManager().createNativeQuery("""
@@ -37,7 +36,7 @@ public class ConversationWorkItemStateService {
                 """.formatted(limit))
                 .setParameter(1, now)
                 .getResultList();
-        List<UUID> ids = rawIds.stream().map(UUID::fromString).toList();
+        List<Long> ids = rawIds.stream().map(Long::valueOf).toList();
         Instant lockedUntil = now.plusSeconds(lockSeconds);
         ids.forEach(id -> Panache.getEntityManager().createNativeQuery("""
                         UPDATE work_account_conversation
@@ -56,7 +55,7 @@ public class ConversationWorkItemStateService {
     }
 
     @Transactional
-    public void fail(UUID conversationId, String owner, Throwable failure) {
+    public void fail(Long conversationId, String owner, Throwable failure) {
         Instant now = Instant.now();
         String message = failure.getMessage() == null
                 ? failure.getClass().getSimpleName()

@@ -8,7 +8,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,7 +21,7 @@ class GmailEmailProviderConnectorTest {
 
         EmailProviderConnector.PollResult result = connector.fetch(
                 new EmailProviderConnector.PollRequest(
-                        UUID.randomUUID(),
+                        1L,
                         "work@example.com",
                         "refresh",
                         "valid-access",
@@ -48,7 +47,7 @@ class GmailEmailProviderConnectorTest {
 
         EmailProviderConnector.ReadResult result = connector.read(
                 new EmailProviderConnector.ReadRequest(
-                        UUID.randomUUID(),
+                        1L,
                         "work@example.com",
                         "refresh",
                         "valid-access",
@@ -70,7 +69,7 @@ class GmailEmailProviderConnectorTest {
 
         EmailProviderConnector.ReplyResult result = connector.reply(
                 new EmailProviderConnector.ReplyRequest(
-                        UUID.randomUUID(),
+                        1L,
                         "work@example.com",
                         "refresh",
                         "valid-access",
@@ -82,7 +81,7 @@ class GmailEmailProviderConnectorTest {
                         "<older@example.com>",
                         "<p>Reviewed <strong>successfully</strong>.</p>",
                         List.of(new EmailProviderConnector.OutgoingAttachment(
-                                UUID.randomUUID(),
+                                2L,
                                 "GST filing.pdf",
                                 "application/pdf",
                                 "pdf-data".getBytes(StandardCharsets.UTF_8)))));

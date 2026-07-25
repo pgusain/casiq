@@ -4,7 +4,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class InMemoryAuthorizationStore {
@@ -25,7 +24,7 @@ public final class InMemoryAuthorizationStore {
         return put(state, codeVerifier, null);
     }
 
-    public Instant put(String state, String codeVerifier, UUID workAccountId) {
+    public Instant put(String state, String codeVerifier, Long workAccountId) {
         Instant expiresAt = clock.instant().plus(lifetime);
         attempts.put(state, new Attempt(codeVerifier, workAccountId, expiresAt));
         attempts.entrySet().removeIf(entry -> !entry.getValue().expiresAt().isAfter(clock.instant()));
@@ -39,7 +38,7 @@ public final class InMemoryAuthorizationStore {
         return Optional.of(new AuthorizationAttempt(attempt.codeVerifier(), attempt.workAccountId()));
     }
 
-    public record AuthorizationAttempt(String codeVerifier, UUID workAccountId) {}
+    public record AuthorizationAttempt(String codeVerifier, Long workAccountId) {}
 
-    private record Attempt(String codeVerifier, UUID workAccountId, Instant expiresAt) {}
+    private record Attempt(String codeVerifier, Long workAccountId, Instant expiresAt) {}
 }

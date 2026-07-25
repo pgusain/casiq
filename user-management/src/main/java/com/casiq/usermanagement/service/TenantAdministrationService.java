@@ -15,7 +15,6 @@ import jakarta.ws.rs.WebApplicationException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 
 @ApplicationScoped
 public class TenantAdministrationService {
@@ -47,7 +46,7 @@ public class TenantAdministrationService {
     }
 
     @Transactional
-    public TenantView update(String rawToken, UUID tenantId, String companyCode,
+    public TenantView update(String rawToken, Long tenantId, String companyCode,
                              String displayName, boolean active) {
         ApplicationUserEntity actor = requireGlobalAdmin(rawToken);
         TenantEntity tenant = TenantEntity.findById(tenantId);
@@ -75,7 +74,7 @@ public class TenantAdministrationService {
         return actor;
     }
 
-    private void ensureUniqueCompanyCode(String normalizedCode, UUID excludedId) {
+    private void ensureUniqueCompanyCode(String normalizedCode, Long excludedId) {
         long matches = excludedId == null
                 ? TenantEntity.count("normalizedCompanyCode", normalizedCode)
                 : TenantEntity.count("normalizedCompanyCode = ?1 and id <> ?2", normalizedCode, excludedId);

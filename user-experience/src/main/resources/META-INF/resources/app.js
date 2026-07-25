@@ -2,11 +2,13 @@ const $ = selector => document.querySelector(selector);
 let currentUser;
 let availableTenants = [];
 let availableWorkItems = [];
+let effectiveWorkItems = [];
 let assignmentWorkItems = [];
 let emailProviders = [];
 let gmailPopup;
 let myWorkPage = 0;
 let activeWorkItemId;
+let workQueueScope = 'MY';
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -17,7 +19,9 @@ async function api(path, options = {}) {
   if (!response.ok) {
     let body = {};
     try { body = await response.json(); } catch (_) {}
-    throw new Error(body.error || `Request failed (${response.status})`);
+    const error = new Error(body.error || `Request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 }
@@ -66,7 +70,7 @@ function showWorkspaceScreen(screen) {
   $('#navigate-work-items').classList.toggle('active', !administration);
   $('#navigate-administration').classList.toggle('active', administration);
   $('#page-eyebrow').textContent = administration ? 'USER MANAGEMENT' : 'WORK ITEM MANAGEMENT';
-  $('#page-title').textContent = administration ? 'Workspace administration' : 'My work items';
+  $('#page-title').textContent = administration ? 'Workspace administration' : 'Work items';
 }
 
 function renderProfile() {
@@ -160,12 +164,14 @@ function openWorkItemForm(definition = null) {
   $('#work-item-type').value = definition?.type || '';
   $('#work-item-name').value = definition?.displayName || '';
   $('#work-item-active').checked = definition?.active ?? true;
-  $('#work-item-statuses').value = definition?.statuses.map(status =>
-    `${status.code} | ${status.displayName} | ${status.initialStatus ? 'INITIAL' : ''} | ${status.terminalStatus ? 'TERMINAL' : ''}`).join('\n') ||
-    'NEW | New | INITIAL |\nIN_PROGRESS | In progress | |\nCOMPLETED | Completed | | TERMINAL';
   $('#work-item-transitions').value = definition?.transitions.map(edge =>
     `${edge.fromStatus} | ${edge.toStatus} | ${edge.label}`).join('\n') ||
-    'NEW | IN_PROGRESS | Start\nIN_PROGRESS | COMPLETED | Complete';
+    'AWAITING_FIRST_RESPONSE | READY_TO_PICK | Ready to pick\n' +
+    'READY_TO_PICK | IN_PROGRESS | Start work\n' +
+    'IN_PROGRESS | AWAITING_CUSTOMER_RESPONSE | Request customer response\n' +
+    'AWAITING_CUSTOMER_RESPONSE | READY_TO_PICK | Customer responded\n' +
+    'IN_PROGRESS | CANCELLED | Cancel\n' +
+    'IN_PROGRESS | COMPLETED | Complete';
   $('#work-item-scope').disabled = Boolean(definition);
   $('#work-item-tenant').disabled = Boolean(definition);
   $('#work-item-type').readOnly = Boolean(definition);
@@ -185,10 +191,6 @@ function parseWorkItemGraph() {
   const lines = value => value.split('\n').map(line => line.trim()).filter(Boolean)
     .map(line => line.split('|').map(part => part.trim()));
   return {
-    statuses: lines($('#work-item-statuses').value).map((parts, sortOrder) => ({
-      code: parts[0], displayName: parts[1], initialStatus: parts[2]?.toUpperCase() === 'INITIAL',
-      terminalStatus: parts[3]?.toUpperCase() === 'TERMINAL', sortOrder
-    })),
     transitions: lines($('#work-item-transitions').value).map(parts =>
       ({fromStatus: parts[0], toStatus: parts[1], label: parts[2]}))
   };
@@ -289,6 +291,8 @@ async function loadMyWork() {
   try {
     const params = new URLSearchParams();
     const summaryParams = new URLSearchParams();
+    params.set('queueScope', workQueueScope);
+    summaryParams.set('queueScope', workQueueScope);
     const type = $('#my-work-type').value.trim();
     const status = $('#my-work-status').value.trim();
     const email = $('#my-work-email').value.trim();
@@ -321,7 +325,12 @@ async function loadMyWork() {
     const executions = result.items;
     const root = $('#my-work');
     updateMyWorkPagination(result);
-    if (!executions.length) { root.innerHTML = '<div class="empty">No work item activities are assigned to you.</div>'; return; }
+    if (!executions.length) {
+      root.innerHTML = `<div class="empty">${workQueueScope === 'MY'
+        ? 'No tasks are currently assigned to you.'
+        : 'No other available or assigned tasks were found.'}</div>`;
+      return;
+    }
     root.replaceChildren(...executions.map(execution => {
       const row = document.createElement('article');
       row.className = 'workflow-row';
@@ -346,6 +355,12 @@ async function loadMyWork() {
       );
       const state = documentNode('div', 'workflow-cell workflow-state');
       state.append(documentNode('span', '', execution.currentStatusDisplayName));
+      state.append(documentNode(
+        'small',
+        '',
+        `${execution.assignedUsername
+          ? `Worked by ${execution.assignedUsername}`
+          : 'Unassigned'}${execution.dataMigrated ? ' · Archived' : ''}`));
       const updated = documentNode(
         'div',
         'workflow-cell workflow-updated',
@@ -357,7 +372,7 @@ async function loadMyWork() {
       const openLabel = execution.conversationId ? 'Open email and work item' : 'Open work item';
       open.title = openLabel;
       open.setAttribute('aria-label', openLabel);
-      open.onclick = () => openWorkItem(execution.id, open);
+      open.onclick = () => pickAndOpenWorkItem(execution, open);
       actions.append(open);
 
       const actionMenu = document.createElement('details');
@@ -400,9 +415,9 @@ async function loadMyWorkTypeOptions() {
   const select = $('#my-work-type');
   const selectedType = select.value;
   const definitions = await api('/api/v1/work-items/effective');
+  effectiveWorkItems = definitions.filter(definition => definition.active);
   const types = [...new Map(
-    definitions
-      .filter(definition => definition.active)
+    effectiveWorkItems
       .map(definition => [
         definition.type,
         definition.displayName || definition.type
@@ -471,12 +486,22 @@ async function openWorkItem(executionId, button) {
     const execution = detail.execution;
     const conversation = detail.conversation;
     activeWorkItemId = execution.id;
+    const readOnly = Boolean(detail.readOnly);
+    $('#work-detail-readonly').classList.toggle('hidden', !readOnly);
+    $('#work-detail-readonly').textContent = readOnly
+      ? (execution.dataMigrated
+        ? 'Read-only: detailed data is being served from the completed work-item archive.'
+        : execution.terminal
+          ? 'Read-only: this work item is in a terminal status.'
+          : `Read-only: this task is being worked by ${execution.assignedUsername}.`)
+      : '';
     $('#work-detail-title').textContent = `${execution.workItemNumber} · ${conversation?.subject || execution.workItemDisplayName}`;
     const metadata = [];
     metadata.push(`Work item number: ${execution.workItemNumber}`);
     metadata.push(`Account: ${execution.emailId}`);
     metadata.push(`Work item: ${execution.workItemDisplayName}`);
     metadata.push(`Status: ${execution.currentStatusDisplayName}`);
+    if (execution.dataMigrated) metadata.push('Data source: Archived JSON');
     if (conversation?.sender) metadata.push(`From: ${conversation.sender}`);
     if (conversation?.recipients) metadata.push(`To: ${conversation.recipients}`);
     if (conversation?.sentAt) metadata.push(`Sent: ${new Date(conversation.sentAt).toLocaleString()}`);
@@ -499,19 +524,37 @@ async function openWorkItem(executionId, button) {
     $('#work-document-error').classList.add('hidden');
     $('#work-document-file').value = '';
     $('#work-reply-files').value = '';
-    $('#work-reply-section').classList.toggle('hidden', !conversation?.sender);
+    $('#work-reply-section').classList.toggle('hidden', readOnly || !conversation?.sender);
+    $('#work-document-form').classList.toggle('hidden', readOnly);
+    $('#work-note-form').classList.toggle('hidden', readOnly);
+    if (!effectiveWorkItems.length) {
+      effectiveWorkItems = (await api('/api/v1/work-items/effective'))
+        .filter(definition => definition.active);
+    }
+    const canChangeType = !readOnly
+      && !execution.terminal
+      && execution.allowedTransitions.length > 0;
+    $('#work-detail-type-section').classList.toggle('hidden', !canChangeType);
+    $('#work-detail-type-error').classList.add('hidden');
+    $('#work-detail-type').replaceChildren(...effectiveWorkItems
+      .map(definition => new Option(
+        `${definition.displayName} (${definition.type})`,
+        definition.id)));
+    $('#work-detail-type').value = String(execution.definitionId);
 
     const actions = $('#work-detail-actions');
-    actions.replaceChildren(...execution.allowedTransitions.map(transition => {
+    actions.replaceChildren(...(readOnly ? [] : execution.allowedTransitions).map(transition => {
       const action = document.createElement('button');
       action.textContent = `${transition.label} → ${transition.toStatus}`;
       action.onclick = () => performTransition(execution.id, transition.id, action);
       return action;
     }));
-    if (!execution.allowedTransitions.length) {
+    if (readOnly || !execution.allowedTransitions.length) {
       const complete = document.createElement('span');
       complete.className = 'terminal-note';
-      complete.textContent = execution.terminal ? 'This work item is completed.' : 'No assigned decision is available.';
+      complete.textContent = readOnly
+        ? 'Open in read-only mode. Reassign the task to yourself to take action.'
+        : (execution.terminal ? 'This work item is completed.' : 'No assigned decision is available.');
       actions.append(complete);
     }
     const history = $('#work-detail-history');
@@ -524,6 +567,39 @@ async function openWorkItem(executionId, button) {
   } catch (cause) {
     notice(cause.message, true);
   } finally {
+    button.disabled = false;
+  }
+}
+
+async function pickAndOpenWorkItem(execution, button) {
+  if (execution.terminal) {
+    return openWorkItem(execution.id, button);
+  }
+  button.disabled = true;
+  try {
+    if (!execution.assignedToCurrentUser) {
+      try {
+        await api(`/api/v1/work-items/executions/${execution.id}/pick`, {
+          method: 'POST'
+        });
+      } catch (cause) {
+        if (cause.status !== 409) throw cause;
+        const takeOver = window.confirm(
+          `${cause.message}.\n\nSelect OK to assign it to yourself, or Cancel to open it read-only.`);
+        if (!takeOver) {
+          button.disabled = false;
+          return openWorkItem(execution.id, button);
+        }
+        await api(`/api/v1/work-items/executions/${execution.id}/pick?force=true`, {
+          method: 'POST'
+        });
+      }
+      await loadMyWork();
+    }
+    button.disabled = false;
+    return openWorkItem(execution.id, button);
+  } catch (cause) {
+    notice(cause.message, true);
     button.disabled = false;
   }
 }
@@ -689,6 +765,28 @@ async function performTransition(executionId, transitionId, button) {
     notice('Work item activity completed.'); await loadMyWork();
   } catch (cause) { notice(cause.message, true); button.disabled = false; }
 }
+
+$('#work-detail-type-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  $('#work-detail-type-error').classList.add('hidden');
+  try {
+    await api(`/api/v1/work-items/executions/${activeWorkItemId}/type`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        definitionId: $('#work-detail-type').value
+      })
+    });
+    $('#work-item-detail').close();
+    notice('Work item type updated. Workflow actions and access were recalculated.');
+    await loadMyWork();
+  } catch (cause) {
+    formError('#work-detail-type-error', cause.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 
 $('#work-note-form').onsubmit = async event => {
   event.preventDefault();
@@ -1180,6 +1278,8 @@ $('#show-work-account-form').onclick = () => openWorkAccountForm();
 $('#cancel-work-account').onclick = () => $('#work-account-form').classList.add('hidden');
 $('#work-account-tenant').onchange = event => loadEffectiveWorkItems(event.target.value).catch(cause => notice(cause.message, true));
 $('#refresh-my-work').onclick = loadMyWork;
+$('#my-tasks-tab').onclick = () => setWorkQueueScope('MY');
+$('#other-tasks-tab').onclick = () => setWorkQueueScope('OTHER');
 $('#navigate-work-items').onclick = () => {
   showWorkspaceScreen('work-items');
   loadMyWork();
@@ -1193,6 +1293,17 @@ $('#clear-my-work-filters').onclick = () => {
 };
 $('#my-work-previous').onclick = () => { if (myWorkPage > 0) { myWorkPage--; loadMyWork(); } };
 $('#my-work-next').onclick = () => { myWorkPage++; loadMyWork(); };
+
+function setWorkQueueScope(scope) {
+  workQueueScope = scope;
+  myWorkPage = 0;
+  const myTasks = scope === 'MY';
+  $('#my-tasks-tab').classList.toggle('active', myTasks);
+  $('#my-tasks-tab').setAttribute('aria-selected', String(myTasks));
+  $('#other-tasks-tab').classList.toggle('active', !myTasks);
+  $('#other-tasks-tab').setAttribute('aria-selected', String(!myTasks));
+  loadMyWork();
+}
 $('#logout').onclick = async () => { await api('/api/v1/auth/logout', {method:'POST'}); currentUser = null; show('login-view'); };
 
 window.addEventListener('message', event => {

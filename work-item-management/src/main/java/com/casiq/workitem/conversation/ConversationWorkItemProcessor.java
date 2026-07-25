@@ -7,10 +7,12 @@ import com.casiq.workitem.persistence.WorkItemDocumentEntity;
 import com.casiq.workitem.persistence.WorkItemCommunicationEntity;
 import com.casiq.workitem.persistence.WorkItemStatusEntity;
 import com.casiq.workitem.persistence.DocumentOrigin;
+import com.casiq.workitem.service.WorkItemDefinitionService;
 import com.casiq.workitem.service.WorkItemNumberService;
 import io.quarkus.hibernate.orm.panache.Panache;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.persistence.LockModeType;
 import jakarta.transaction.Transactional;
 import org.jboss.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -18,7 +20,6 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 
 @ApplicationScoped
 public class ConversationWorkItemProcessor {
@@ -28,7 +29,7 @@ public class ConversationWorkItemProcessor {
     long emailCacheSeconds;
 
     @Transactional
-    public void createExecution(UUID conversationId, String owner) {
+    public void createExecution(Long conversationId, String owner) {
         LOG.debugf("Creating work-item execution conversationId=%s owner=%s",
                 conversationId, owner);
         Instant now = Instant.now();
@@ -47,13 +48,14 @@ public class ConversationWorkItemProcessor {
                     conversation.content_text,
                     conversation.snippet,
                     conversation.provider_thread_id,
-                    conversation.provider_code,
+                    provider.code,
                     conversation.provider_message_id,
                     conversation.rfc_message_id,
                     conversation.in_reply_to,
                     conversation.reference_ids
                 FROM work_account_conversation conversation
                 JOIN work_account account ON account.id = conversation.work_account_id
+                JOIN email_provider_reference provider ON provider.id = conversation.provider_id
                 WHERE conversation.id = ?1
                   AND conversation.direction = 'INBOUND'
                   AND conversation.work_item_processed_at IS NULL
@@ -70,10 +72,10 @@ public class ConversationWorkItemProcessor {
         }
 
         Object[] source = rows.get(0);
-        UUID tenantId = UUID.fromString(String.valueOf(source[0]));
-        UUID workAccountId = UUID.fromString(String.valueOf(source[1]));
+        Long tenantId = longValue(source[0]);
+        Long workAccountId = longValue(source[1]);
         String workAccountEmail = String.valueOf(source[2]);
-        UUID definitionId = UUID.fromString(String.valueOf(source[3]));
+        Long definitionId = longValue(source[3]);
         String providerThreadId = nullableString(source[11]);
 
         // Serialize execution creation for one mailbox. Without this lock, two
@@ -99,7 +101,7 @@ public class ConversationWorkItemProcessor {
                 existing = prior.execution;
             }
         }
-        UUID executionId;
+        Long executionId;
         if (existing == null) {
             TenantEntity tenant = TenantEntity.findById(tenantId);
             WorkItemDefinitionEntity definition = WorkItemDefinitionEntity.findById(definitionId);
@@ -119,7 +121,6 @@ public class ConversationWorkItemProcessor {
             execution.workAccountNormalizedEmail =
                     workAccountEmail.trim().toLowerCase(Locale.ROOT);
             execution.conversationId = conversationId;
-            execution.initialCommunicationId = conversationId;
             execution.emailSubject = nullableString(source[4]);
             execution.emailSender = nullableString(source[5]);
             execution.emailRecipients = nullableString(source[6]);
@@ -128,19 +129,31 @@ public class ConversationWorkItemProcessor {
             execution.definition = definition;
             execution.currentStatus = initial;
             execution.createdAt = now;
+            execution.archiveNextAttemptAt = now;
             execution.updatedAt = now;
             Panache.getEntityManager().persist(execution);
             Panache.getEntityManager().flush();
             executionId = execution.id;
-            createCommunication(execution, conversationId, source, now);
-            copyAttachments(execution, conversationId, now);
+            WorkItemCommunicationEntity communication =
+                    createCommunication(execution, source, now);
+            execution.initialCommunicationId = communication.id;
+            copyAttachments(execution, communication, conversationId, now);
             LOG.infof("Created work-item execution executionId=%s conversationId=%s workAccountId=%s definitionId=%s initialStatus=%s",
                     executionId, conversationId, workAccountId, definitionId, initial.code);
         } else {
+            existing = WorkItemExecutionEntity.find("id", existing.id)
+                    .withLock(LockModeType.PESSIMISTIC_WRITE)
+                    .firstResult();
+            if (existing == null) {
+                throw new IllegalStateException(
+                        "Existing work-item execution no longer exists");
+            }
             executionId = existing.id;
             existing.updatedAt = now;
-            createCommunication(existing, conversationId, source, now);
-            copyAttachments(existing, conversationId, now);
+            WorkItemCommunicationEntity communication =
+                    createCommunication(existing, source, now);
+            copyAttachments(existing, communication, conversationId, now);
+            moveCustomerResponseToReady(existing, now);
             LOG.infof("Linked conversation to existing work item executionId=%s conversationId=%s providerThreadId=%s",
                     executionId, conversationId, providerThreadId);
         }
@@ -165,9 +178,32 @@ public class ConversationWorkItemProcessor {
                 conversationId, executionId, owner);
     }
 
+    private void moveCustomerResponseToReady(
+            WorkItemExecutionEntity execution,
+            Instant changedAt) {
+        if (!WorkItemDefinitionService.AWAITING_CUSTOMER_RESPONSE.equals(
+                execution.currentStatus.code)) {
+            return;
+        }
+        WorkItemStatusEntity readyToPick = WorkItemStatusEntity.find(
+                "definition.id = ?1 and code = ?2",
+                execution.definition.id,
+                WorkItemDefinitionService.READY_TO_PICK).firstResult();
+        if (readyToPick == null) {
+            throw new IllegalStateException(
+                    "Linked work-item definition has no READY_TO_PICK status");
+        }
+        execution.currentStatus = readyToPick;
+        execution.updatedAt = changedAt;
+        LOG.infof(
+                "Moved work item to READY_TO_PICK after inbound customer response executionId=%s",
+                execution.id);
+    }
+
     private void copyAttachments(
             WorkItemExecutionEntity execution,
-            UUID conversationId,
+            WorkItemCommunicationEntity communication,
+            Long conversationId,
             Instant createdAt) {
         @SuppressWarnings("unchecked")
         List<Object[]> attachments = Panache.getEntityManager().createNativeQuery("""
@@ -179,10 +215,8 @@ public class ConversationWorkItemProcessor {
                 """)
                 .setParameter(1, conversationId)
                 .getResultList();
-        WorkItemCommunicationEntity communication =
-                WorkItemCommunicationEntity.findById(conversationId);
         for (Object[] source : attachments) {
-            UUID sourceId = UUID.fromString(String.valueOf(source[0]));
+            Long sourceId = longValue(source[0]);
             WorkItemDocumentEntity document = new WorkItemDocumentEntity();
             document.tenant = execution.tenant;
             document.execution = execution;
@@ -200,22 +234,24 @@ public class ConversationWorkItemProcessor {
             Panache.getEntityManager().persist(document);
         }
         LOG.debugf("Copied email attachments to work item executionId=%s count=%d",
-                execution.id, attachments.size());
+                (Object) execution.id, attachments.size());
     }
 
-    private void createCommunication(
+    private WorkItemCommunicationEntity createCommunication(
             WorkItemExecutionEntity execution,
-            UUID conversationId,
             Object[] source,
             Instant now) {
-        if (WorkItemCommunicationEntity.findById(conversationId) != null) return;
+        String providerMessageId = String.valueOf(source[13]);
+        WorkItemCommunicationEntity existing = WorkItemCommunicationEntity.find(
+                "execution = ?1 and providerMessageId = ?2", execution, providerMessageId)
+                .firstResult();
+        if (existing != null) return existing;
         WorkItemCommunicationEntity communication = new WorkItemCommunicationEntity();
-        communication.id = conversationId;
         communication.tenant = execution.tenant;
         communication.execution = execution;
         communication.workAccountId = execution.workAccountId;
         communication.providerCode = String.valueOf(source[12]);
-        communication.providerMessageId = String.valueOf(source[13]);
+        communication.providerMessageId = providerMessageId;
         communication.providerThreadId = nullableString(source[11]);
         communication.rfcMessageId = nullableString(source[14]);
         communication.inReplyTo = nullableString(source[15]);
@@ -232,10 +268,16 @@ public class ConversationWorkItemProcessor {
         communication.cacheExpiresAt = now.plusSeconds(Math.max(0, emailCacheSeconds));
         communication.createdAt = now;
         Panache.getEntityManager().persist(communication);
+        Panache.getEntityManager().flush();
+        return communication;
     }
 
     private static String nullableString(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private static Long longValue(Object value) {
+        return value instanceof Number number ? number.longValue() : Long.valueOf(String.valueOf(value));
     }
 
     private static Instant instant(Object value) {

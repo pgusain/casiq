@@ -5,14 +5,13 @@ import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.*;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "work_account_conversation_attachment", uniqueConstraints = @UniqueConstraint(
         name = "uq_conversation_provider_attachment",
         columnNames = {"conversation_id", "provider_attachment_id"}))
 public class WorkAccountConversationAttachmentEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id")
     public TenantEntity tenant;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "conversation_id")

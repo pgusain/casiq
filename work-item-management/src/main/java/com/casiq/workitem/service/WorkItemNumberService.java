@@ -30,7 +30,7 @@ public class WorkItemNumberService {
                 ? FIRST_WORK_ITEM_NUMBER
                 : currentMaximum.longValue() + 1L;
         LOG.debugf("Allocated tenant work-item number tenantId=%s workItemNumber=%d",
-                tenant.id, nextNumber);
+                (Object) tenant.id, nextNumber);
         return nextNumber;
     }
 }

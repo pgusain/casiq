@@ -6,12 +6,11 @@ import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.*;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "work_item_internal_note")
 public class WorkItemInternalNoteEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id")
     public TenantEntity tenant;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "execution_id")

@@ -16,7 +16,6 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Context;
 import java.util.Map;
-import java.util.UUID;
 
 @Path("/api/v1/gmail")
 @Produces({MediaType.APPLICATION_JSON, MediaType.TEXT_HTML})
@@ -35,7 +34,7 @@ public class GmailOAuthResource {
     @Path("/work-accounts/{id}/authorize")
     public GmailOAuthService.AuthorizationResponse authorizeWorkAccount(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("id") UUID id) {
+            @PathParam("id") Long id) {
         var account = workAccounts.requireManageable(token, id);
         if (!"GOOGLE".equals(account.provider())) {
             throw new BadRequestException("The selected work account is not a Google account");

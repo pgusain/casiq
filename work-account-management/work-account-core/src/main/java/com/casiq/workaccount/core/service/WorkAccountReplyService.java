@@ -39,10 +39,10 @@ public class WorkAccountReplyService {
     @Transactional
     public ReplyView reply(
             String token,
-            UUID executionId,
+            Long executionId,
             UUID requestId,
             String htmlBody,
-            List<UUID> requestedDocumentIds) {
+            List<Long> requestedDocumentIds) {
         if (requestId == null) throw new BadRequestException("requestId is required");
         String body = htmlBody == null ? "" : htmlBody.trim();
         if (body.isBlank()) throw new BadRequestException("Reply content is required");
@@ -174,15 +174,15 @@ public class WorkAccountReplyService {
 
     private List<SelectedDocument> selectedDocuments(
             WorkItemWorkflowService.ReplyTarget target,
-            List<UUID> requestedIds) {
+            List<Long> requestedIds) {
         if (requestedIds == null || requestedIds.isEmpty()) return List.of();
-        LinkedHashSet<UUID> ids = new LinkedHashSet<>(requestedIds);
+        LinkedHashSet<Long> ids = new LinkedHashSet<>(requestedIds);
         if (ids.size() > 20) {
             throw new BadRequestException("At most 20 documents can be attached to one reply");
         }
         List<SelectedDocument> selected = new ArrayList<>();
         long totalSize = 0;
-        for (UUID id : ids) {
+        for (Long id : ids) {
             WorkItemDocumentEntity document = WorkItemDocumentEntity.find(
                     "id = ?1 and execution.id = ?2 and tenant.id = ?3",
                     id, target.executionId(), target.tenantId()).firstResult();
@@ -233,7 +233,6 @@ public class WorkAccountReplyService {
             UUID requestId,
             String fallbackHtml) {
         WorkItemCommunicationEntity communication = new WorkItemCommunicationEntity();
-        communication.id = conversation.id;
         communication.tenant = execution.tenant;
         communication.execution = execution;
         communication.workAccountId = execution.workAccountId;
@@ -299,7 +298,7 @@ public class WorkAccountReplyService {
     }
 
     public record ReplyView(
-            UUID conversationId,
+            Long conversationId,
             UUID requestId,
             String providerMessageId,
             String providerThreadId,

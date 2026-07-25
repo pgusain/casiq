@@ -24,7 +24,7 @@ public class S3AttachmentStorage implements AttachmentStorage {
 
     @Override
     public StoredObject put(
-            UUID tenantId,
+            Long tenantId,
             String category,
             String filename,
             String contentType,
@@ -34,6 +34,17 @@ public class S3AttachmentStorage implements AttachmentStorage {
                 ? "other"
                 : category.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_-]", "-");
         String key = safeCategory + "/" + UUID.randomUUID();
+        return putAtKey(tenantId, key, contentType, content);
+    }
+
+    @Override
+    public StoredObject putAtKey(
+            Long tenantId,
+            String key,
+            String contentType,
+            byte[] content) {
+        validateKey(key);
+        if (content == null) throw new IllegalArgumentException("Attachment content is required");
         PutObjectRequest.Builder request = PutObjectRequest.builder()
                 .bucket(bucket(tenantId))
                 .key(key);
@@ -47,10 +58,8 @@ public class S3AttachmentStorage implements AttachmentStorage {
     }
 
     @Override
-    public byte[] get(UUID tenantId, String key) {
-        if (key == null || key.isBlank() || key.contains("..")) {
-            throw new IllegalArgumentException("Invalid S3 attachment key");
-        }
+    public byte[] get(Long tenantId, String key) {
+        validateKey(key);
         return s3.getObjectAsBytes(GetObjectRequest.builder()
                         .bucket(bucket(tenantId))
                         .key(key)
@@ -58,7 +67,14 @@ public class S3AttachmentStorage implements AttachmentStorage {
                 .asByteArray();
     }
 
-    private String bucket(UUID tenantId) {
+    private static void validateKey(String key) {
+        if (key == null || key.isBlank() || key.startsWith("/")
+                || key.contains("..") || key.contains("\\")) {
+            throw new IllegalArgumentException("Invalid S3 attachment key");
+        }
+    }
+
+    private String bucket(Long tenantId) {
         String prefix = bucketPrefix.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9.-]", "-");
         String bucket = prefix + tenantId;

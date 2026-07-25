@@ -6,19 +6,18 @@ import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.*;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "work_item_document", uniqueConstraints = @UniqueConstraint(
         name = "uq_work_item_source_attachment",
         columnNames = {"execution_id", "source_attachment_id"}))
 public class WorkItemDocumentEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id")
     public TenantEntity tenant;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "execution_id")
     public WorkItemExecutionEntity execution;
-    @Column(name = "source_attachment_id") public UUID sourceAttachmentId;
+    @Column(name = "source_attachment_id") public Long sourceAttachmentId;
     @Column(nullable = false, length = 2048) public String filename;
     @Column(name = "content_type", length = 512) public String contentType;
     @Column(name = "content_size", nullable = false) public long contentSize;
@@ -27,7 +26,7 @@ public class WorkItemDocumentEntity extends PanacheEntityBase {
     @Enumerated(EnumType.STRING)
     @Column(name = "document_origin", nullable = false, length = 16)
     public DocumentOrigin origin;
-    @Column(name = "source_conversation_id") public UUID sourceConversationId;
+    @Column(name = "source_conversation_id") public Long sourceConversationId;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "communication_id")
     public WorkItemCommunicationEntity communication;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "uploaded_by_user_id")

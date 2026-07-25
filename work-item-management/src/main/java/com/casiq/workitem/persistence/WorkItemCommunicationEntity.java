@@ -19,12 +19,12 @@ import java.util.UUID;
                         columnNames = "outbound_request_id")
         })
 public class WorkItemCommunicationEntity extends PanacheEntityBase {
-    @Id public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "tenant_id") public TenantEntity tenant;
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "execution_id") public WorkItemExecutionEntity execution;
-    @Column(name = "work_account_id", nullable = false) public UUID workAccountId;
+    @Column(name = "work_account_id", nullable = false) public Long workAccountId;
     @Column(name = "provider_code", nullable = false, length = 32) public String providerCode;
     @Column(name = "provider_message_id", nullable = false, length = 255)
     public String providerMessageId;

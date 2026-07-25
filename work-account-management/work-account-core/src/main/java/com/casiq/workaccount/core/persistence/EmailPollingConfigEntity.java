@@ -3,16 +3,15 @@ package com.casiq.workaccount.core.persistence;
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.*;
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "email_polling_config")
 public class EmailPollingConfigEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @OneToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "work_account_id", unique = true)
     public WorkAccountEntity workAccount;
     @Column(name = "email_id", nullable = false, length = 320) public String emailId;
-    @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "provider_code")
+    @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "provider_id")
     public EmailProviderEntity provider;
     @Column(name = "access_token", columnDefinition = "TEXT") public String accessToken;
     @Column(name = "access_token_expires_at") public Instant accessTokenExpiresAt;

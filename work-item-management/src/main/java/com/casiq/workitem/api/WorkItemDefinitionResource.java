@@ -7,7 +7,6 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.List;
-import java.util.UUID;
 
 @Path("/api/v1/work-items")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -21,7 +20,7 @@ public class WorkItemDefinitionResource {
     }
     @GET @Path("/effective")
     public List<WorkItemDefinitionView> effective(@CookieParam(AuthResource.SESSION_COOKIE) String token,
-                                                  @QueryParam("tenantId") UUID tenantId) {
+                                                  @QueryParam("tenantId") Long tenantId) {
         return workItems.effective(token, tenantId);
     }
     @POST @Path("/definitions")
@@ -31,7 +30,7 @@ public class WorkItemDefinitionResource {
     }
     @PUT @Path("/definitions/{id}")
     public WorkItemDefinitionView update(@CookieParam(AuthResource.SESSION_COOKIE) String token,
-                                         @PathParam("id") UUID id,
+                                         @PathParam("id") Long id,
                                          @NotNull WorkItemDefinitionService.DefinitionInput input) {
         return workItems.update(token, id, input);
     }

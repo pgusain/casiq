@@ -6,7 +6,8 @@ import jakarta.persistence.*;
 @Entity
 @Table(name = "email_provider_reference")
 public class EmailProviderEntity extends PanacheEntityBase {
-    @Id @Column(length = 32) public String code;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
+    @Column(nullable = false, unique = true, length = 32) public String code;
     @Column(name = "display_name", nullable = false, length = 80) public String displayName;
     @Column(nullable = false) public boolean active;
     @Column(name = "sort_order", nullable = false) public int sortOrder;

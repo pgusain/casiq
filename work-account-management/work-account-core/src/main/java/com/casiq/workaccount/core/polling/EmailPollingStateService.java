@@ -9,7 +9,6 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 @ApplicationScoped
 public class EmailPollingStateService {
@@ -19,7 +18,7 @@ public class EmailPollingStateService {
     @ConfigProperty(name = "casiq.email-polling.retry-delay-seconds") long retryDelaySeconds;
 
     @Transactional
-    public List<UUID> claimDue(String owner, Instant now) {
+    public List<Long> claimDue(String owner, Instant now) {
         int limit = Math.max(1, Math.min(batchSize, 1000));
         @SuppressWarnings("unchecked")
         List<String> rawIds = Panache.getEntityManager().createNativeQuery("""
@@ -36,7 +35,7 @@ public class EmailPollingStateService {
                 """.formatted(limit))
                 .setParameter(1, now)
                 .getResultList();
-        List<UUID> ids = rawIds.stream().map(UUID::fromString).toList();
+        List<Long> ids = rawIds.stream().map(Long::valueOf).toList();
         Instant lockedUntil = now.plusSeconds(lockSeconds);
         ids.forEach(id -> {
             EmailPollingConfigEntity config = EmailPollingConfigEntity.findById(id);
@@ -51,7 +50,7 @@ public class EmailPollingStateService {
     }
 
     @Transactional
-    public void fail(UUID configId, String owner, Throwable failure) {
+    public void fail(Long configId, String owner, Throwable failure) {
         EmailPollingConfigEntity config = EmailPollingConfigEntity.findById(configId);
         if (config == null || !owner.equals(config.lockOwner)) return;
         Instant now = Instant.now();
@@ -65,4 +64,5 @@ public class EmailPollingStateService {
         LOG.warnf("Email polling scheduled for retry configId=%s owner=%s failures=%d retryAt=%s error=%s",
                 configId, owner, config.consecutiveFailures, config.nextRefreshAt, config.lastError);
     }
+
 }

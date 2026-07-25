@@ -5,12 +5,11 @@ import com.casiq.usermanagement.persistence.TenantEntity;
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.*;
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "work_item_activity")
 public class WorkItemActivityEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id") public TenantEntity tenant;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "execution_id") public WorkItemExecutionEntity execution;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "transition_id") public WorkItemTransitionEntity transition;

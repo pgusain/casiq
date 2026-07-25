@@ -3,11 +3,9 @@ package com.casiq.usermanagement.api;
 import com.casiq.usermanagement.persistence.ApplicationUserEntity;
 
 import java.time.Instant;
-import java.util.UUID;
-
 public record UserView(
-        UUID id,
-        UUID tenantId,
+        Long id,
+        Long tenantId,
         String companyCode,
         String username,
         String firstName,

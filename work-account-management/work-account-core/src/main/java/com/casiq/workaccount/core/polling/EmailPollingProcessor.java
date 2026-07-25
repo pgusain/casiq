@@ -18,7 +18,6 @@ import org.jboss.logging.Logger;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.UUID;
 
 @ApplicationScoped
 public class EmailPollingProcessor {
@@ -29,7 +28,7 @@ public class EmailPollingProcessor {
     @ConfigProperty(name = "casiq.email-polling.initial-lookback-hours") long initialLookbackHours;
 
     @Transactional
-    public void poll(UUID configId, String owner) {
+    public void poll(Long configId, String owner) {
         LOG.debugf("Processing email polling configuration configId=%s owner=%s", configId, owner);
         EmailPollingConfigEntity config = EmailPollingConfigEntity.findById(configId);
         if (config == null || !owner.equals(config.lockOwner)) {
@@ -161,6 +160,6 @@ public class EmailPollingProcessor {
             Panache.getEntityManager().persist(entity);
         }
         LOG.debugf("Captured email attachments conversationId=%s count=%d",
-                conversation.id, attachments.size());
+                (Object) conversation.id, attachments.size());
     }
 }

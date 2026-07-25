@@ -2,32 +2,38 @@ package com.casiq.workitem.api;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 public final class WorkItemWorkflowView {
     private WorkItemWorkflowView() {}
 
     public record Assignment(
-            UUID id, String assignmentType, UUID tenantId, UUID definitionId, String workItemType,
-            UUID statusId, String statusCode, UUID transitionId, String transitionLabel,
-            UUID userId, String username, Instant createdAt) {}
+            Long id, String assignmentType, Long tenantId, Long definitionId, String workItemType,
+            Long statusId, String statusCode, Long transitionId, String transitionLabel,
+            Long userId, String username, Instant createdAt) {}
 
-    public record Transition(UUID id, String label, String fromStatus, String toStatus) {}
+    public record Transition(Long id, String label, String fromStatus, String toStatus) {}
 
     public record Activity(String transitionLabel, String fromStatus, String toStatus,
-                           UUID performedByUserId, String performedByUsername, Instant performedAt) {}
+                           Long performedByUserId, String performedByUsername, Instant performedAt) {}
 
     public record Execution(
-            UUID id, long workItemNumber, UUID workAccountId, UUID conversationId,
+            Long id, long workItemNumber, Long workAccountId, Long conversationId,
             String emailId, String emailSubject, String emailSender,
-            UUID definitionId, String workItemType,
-            String workItemDisplayName, UUID currentStatusId, String currentStatus,
+            Long definitionId, String workItemType,
+            String workItemDisplayName, Long currentStatusId, String currentStatus,
             String currentStatusDisplayName, boolean terminal,
+            boolean dataMigrated,
+            Long assignedUserId, String assignedUsername, boolean assignedToCurrentUser,
             List<Transition> allowedTransitions,
             List<Activity> activities, Instant updatedAt) {}
 
+    public record PickResult(
+            Execution execution,
+            boolean newlyAssigned,
+            boolean reassigned) {}
+
     public record Conversation(
-            UUID id,
+            Long id,
             String subject,
             String sender,
             String recipients,
@@ -40,18 +46,18 @@ public final class WorkItemWorkflowView {
             boolean staleFallback) {}
 
     public record Document(
-            UUID id,
+            Long id,
             String filename,
             String contentType,
             long size,
             String origin,
-            UUID sourceConversationId,
+            Long sourceConversationId,
             String uploadedByUsername,
             Instant createdAt) {}
 
     public record InternalNote(
-            UUID id,
-            UUID authorUserId,
+            Long id,
+            Long authorUserId,
             String authorUsername,
             String content,
             Instant createdAt) {}
@@ -61,7 +67,8 @@ public final class WorkItemWorkflowView {
             Conversation conversation,
             List<Conversation> communications,
             List<Document> documents,
-            List<InternalNote> internalNotes) {}
+            List<InternalNote> internalNotes,
+            boolean readOnly) {}
 
     public record WorkPage(
             List<Execution> items,

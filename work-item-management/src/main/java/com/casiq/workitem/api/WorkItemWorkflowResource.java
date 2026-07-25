@@ -10,7 +10,6 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.List;
-import java.util.UUID;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -26,7 +25,7 @@ public class WorkItemWorkflowResource {
 
     @GET @Path("/assignments")
     public List<WorkItemWorkflowView.Assignment> assignments(
-            @CookieParam(AuthResource.SESSION_COOKIE) String token, @QueryParam("tenantId") UUID tenantId) {
+            @CookieParam(AuthResource.SESSION_COOKIE) String token, @QueryParam("tenantId") Long tenantId) {
         return workflows.listAssignments(token, tenantId);
     }
     @POST @Path("/assignments")
@@ -37,13 +36,14 @@ public class WorkItemWorkflowResource {
     }
     @DELETE @Path("/assignments/{type}/{id}")
     public Response remove(@CookieParam(AuthResource.SESSION_COOKIE) String token,
-                           @PathParam("type") String type, @PathParam("id") UUID id) {
+                           @PathParam("type") String type, @PathParam("id") Long id) {
         workflows.removeAssignment(token, type, id);
         return Response.noContent().build();
     }
     @GET @Path("/my-work")
     public WorkItemWorkflowView.WorkPage myWork(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
+            @DefaultValue("ALL") @QueryParam("queueScope") String queueScope,
             @QueryParam("workItemType") String workItemType,
             @QueryParam("status") String status,
             @QueryParam("email") String email,
@@ -53,28 +53,45 @@ public class WorkItemWorkflowResource {
             @DefaultValue("updatedAt") @QueryParam("sortBy") String sortBy,
             @DefaultValue("desc") @QueryParam("sortDirection") String sortDirection) {
         return workflows.myWork(
-                token, workItemType, status, email, includeTerminal,
+                token, queueScope, workItemType, status, email, includeTerminal,
                 page, size, sortBy, sortDirection);
     }
     @GET @Path("/my-work/status-summary")
     public List<WorkItemWorkflowView.StatusCount> myWorkStatusSummary(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
+            @DefaultValue("ALL") @QueryParam("queueScope") String queueScope,
             @QueryParam("workItemType") String workItemType,
             @QueryParam("email") String email,
             @DefaultValue("false") @QueryParam("includeTerminal") boolean includeTerminal) {
         return workflows.myWorkStatusSummary(
-                token, workItemType, email, includeTerminal);
+                token, queueScope, workItemType, email, includeTerminal);
+    }
+    @POST @Path("/executions/{executionId}/pick")
+    @Consumes(MediaType.WILDCARD)
+    public WorkItemWorkflowView.PickResult pick(
+            @CookieParam(AuthResource.SESSION_COOKIE) String token,
+            @PathParam("executionId") Long executionId,
+            @DefaultValue("false") @QueryParam("force") boolean force) {
+        return workflows.pick(token, executionId, force);
+    }
+    @PUT @Path("/executions/{executionId}/type")
+    public WorkItemWorkflowView.Execution changeType(
+            @CookieParam(AuthResource.SESSION_COOKIE) String token,
+            @PathParam("executionId") Long executionId,
+            @NotNull ChangeTypeInput input) {
+        return workflows.changeExecutionDefinition(
+                token, executionId, input.definitionId());
     }
     @GET @Path("/executions/{executionId}")
     public WorkItemWorkflowView.Detail detail(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("executionId") UUID executionId) {
+            @PathParam("executionId") Long executionId) {
         return workflows.detail(token, executionId);
     }
     @POST @Path("/executions/{executionId}/notes")
     public WorkItemWorkflowView.InternalNote addNote(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("executionId") UUID executionId,
+            @PathParam("executionId") Long executionId,
             @NotNull NoteInput input) {
         return workflows.addInternalNote(token, executionId, input.content());
     }
@@ -82,8 +99,8 @@ public class WorkItemWorkflowResource {
     @Produces(MediaType.APPLICATION_OCTET_STREAM)
     public Response document(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("executionId") UUID executionId,
-            @PathParam("documentId") UUID documentId) {
+            @PathParam("executionId") Long executionId,
+            @PathParam("documentId") Long documentId) {
         WorkItemWorkflowService.DocumentDownload document =
                 workflows.document(token, executionId, documentId);
         String contentType = document.contentType() == null
@@ -101,7 +118,7 @@ public class WorkItemWorkflowResource {
     @Consumes(MediaType.MULTIPART_FORM_DATA)
     public WorkItemWorkflowView.Document uploadDocument(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("executionId") UUID executionId,
+            @PathParam("executionId") Long executionId,
             @RestForm("file") FileUpload file) {
         if (file == null) throw new BadRequestException("Document file is required");
         try {
@@ -119,10 +136,13 @@ public class WorkItemWorkflowResource {
     @Consumes(MediaType.WILDCARD)
     public WorkItemWorkflowView.Execution perform(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("executionId") UUID executionId, @PathParam("transitionId") UUID transitionId) {
+            @PathParam("executionId") Long executionId, @PathParam("transitionId") Long transitionId) {
         return workflows.perform(token, executionId, transitionId);
     }
 
     public record NoteInput(
             @NotBlank @Size(max = 10_000) String content) {}
+
+    public record ChangeTypeInput(
+            @NotNull Long definitionId) {}
 }

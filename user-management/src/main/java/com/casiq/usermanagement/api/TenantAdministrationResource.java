@@ -18,7 +18,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
 import java.util.List;
-import java.util.UUID;
 
 @Path("/api/v1/tenants")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -42,7 +41,7 @@ public class TenantAdministrationResource {
     @Path("/{id}")
     public TenantView update(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("id") UUID id,
+            @PathParam("id") Long id,
             @Valid @NotNull TenantRequest request) {
         return tenants.update(token, id, request.companyCode(), request.displayName(), request.active());
     }

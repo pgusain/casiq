@@ -8,6 +8,9 @@
 .work-item-panel{margin-bottom:38px;padding-bottom:34px;border-bottom:1px solid var(--line)}
 .assignment-panel{margin-bottom:38px;padding-bottom:34px;border-bottom:1px solid var(--line)}
 .my-work-panel{margin-bottom:34px}
+.work-queue-tabs{display:flex;gap:4px;width:max-content;margin:0 0 13px;padding:4px;border-radius:10px;background:#eaf0ec}
+.work-queue-tab{border:0;border-radius:8px;padding:8px 14px;background:transparent;color:var(--muted);font-size:11px;cursor:pointer}
+.work-queue-tab.active{background:white;color:var(--green);box-shadow:0 2px 7px rgba(20,50,36,.09);font-weight:750}
 .workspace-navigation{display:flex;gap:4px;padding:3px;border-radius:9px;background:#eaf0ec}
 .workspace-navigation-button{border:0;border-radius:7px;padding:7px 10px;background:transparent;color:var(--muted);font-size:10px;cursor:pointer}
 .workspace-navigation-button.active{background:white;color:var(--green);box-shadow:0 2px 7px rgba(20,50,36,.09);font-weight:700}
@@ -32,7 +35,7 @@
 .workflow-cell strong{font-size:11px}.workflow-cell small{margin-top:3px;color:var(--muted);font-size:9px}
 .workflow-number{color:var(--green);font-size:11px;font-weight:800}
 .workflow-updated{color:var(--muted)}
-.workflow-state{display:flex;align-items:center;gap:7px}
+.workflow-state{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
 .workflow-state span{font-size:9px;padding:5px 8px;border-radius:12px;background:var(--mint);color:var(--green);font-weight:750}
 .workflow-actions{position:relative;display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:7px}
 .workflow-actions button{border:0;border-radius:8px;background:var(--green);color:white;padding:8px 10px;font-size:10px;cursor:pointer}
@@ -99,6 +102,7 @@
 .communication-frame{display:block;width:100%;height:230px;border:0;border-top:1px solid var(--line);background:white}
 .detail-actions{margin-top:15px}
 .terminal-note{color:var(--muted);font-size:11px}
+.readonly-banner{margin:0 0 13px;padding:10px 12px;border:1px solid #efcf8b;border-radius:9px;background:#fff8e8;color:#80591b;font-size:11px;font-weight:650}
 .assignment-kind{font-size:9px;padding:5px 8px;border-radius:11px;background:#eef3ff;color:#315b9b}
 .checkbox-field{min-width:0;margin:0 0 15px;padding:0;border:0}
 .checkbox-field legend{color:#4f5b56;font-size:11px;font-weight:650;margin-bottom:2px}
@@ -110,6 +114,8 @@
 .checkbox-empty{padding:12px;color:var(--muted);font-size:10px}
 .graph-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
 .graph-fields textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:118px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.fixed-statuses{padding:13px;border:1px solid var(--line);border-radius:9px;background:#f7faf8}
+.fixed-statuses strong{font-size:11px}.fixed-statuses p{margin:8px 0;line-height:1.6;overflow-wrap:anywhere;font:10px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--green)}
 .field-help{display:block;color:var(--muted);font-size:10px;font-weight:500;margin:4px 0 7px}
 .graph-summary{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:5px}
 .graph-node{font-size:9px;border:1px solid var(--line);border-radius:10px;padding:3px 6px;background:#fff}

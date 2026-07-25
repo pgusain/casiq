@@ -22,7 +22,20 @@ import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class WorkItemDefinitionService {
-    public static final UUID CASIQ_TENANT_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    public static final Long CASIQ_TENANT_ID = 1L;
+    public static final String AWAITING_FIRST_RESPONSE = "AWAITING_FIRST_RESPONSE";
+    public static final String READY_TO_PICK = "READY_TO_PICK";
+    public static final String IN_PROGRESS = "IN_PROGRESS";
+    public static final String AWAITING_CUSTOMER_RESPONSE = "AWAITING_CUSTOMER_RESPONSE";
+    public static final String CANCELLED = "CANCELLED";
+    public static final String COMPLETED = "COMPLETED";
+    private static final List<StatusInput> REQUIRED_STATUSES = List.of(
+            new StatusInput(AWAITING_FIRST_RESPONSE, "Awaiting first response", true, false, 0),
+            new StatusInput(READY_TO_PICK, "Ready to pick", false, false, 1),
+            new StatusInput(IN_PROGRESS, "In progress", false, false, 2),
+            new StatusInput(AWAITING_CUSTOMER_RESPONSE, "Awaiting customer response", false, false, 3),
+            new StatusInput(CANCELLED, "Cancelled", false, true, 4),
+            new StatusInput(COMPLETED, "Completed", false, true, 5));
     @Inject AuthService auth;
 
     @Transactional
@@ -33,9 +46,9 @@ public class WorkItemDefinitionService {
     }
 
     @Transactional
-    public List<WorkItemDefinitionView> effective(String token, UUID requestedTenantId) {
+    public List<WorkItemDefinitionView> effective(String token, Long requestedTenantId) {
         ApplicationUserEntity actor = authorizedReader(token);
-        UUID tenantId = actor.role == UserRole.GLOBAL_ADMIN
+        Long tenantId = actor.role == UserRole.GLOBAL_ADMIN
                 ? (requestedTenantId == null ? actor.tenant.id : requestedTenantId)
                 : actor.tenant.id;
         if (actor.role != UserRole.GLOBAL_ADMIN && requestedTenantId != null && !requestedTenantId.equals(actor.tenant.id)) {
@@ -75,11 +88,11 @@ public class WorkItemDefinitionService {
     }
 
     @Transactional
-    public WorkItemDefinitionView update(String token, UUID id, DefinitionInput input) {
+    public WorkItemDefinitionView update(String token, Long id, DefinitionInput input) {
         globalAdministrator(token);
         validate(input);
         WorkItemDefinitionEntity definition = requireDefinition(id);
-        UUID requestedOwner = input.globalScope() ? CASIQ_TENANT_ID : input.tenantId();
+        Long requestedOwner = input.globalScope() ? CASIQ_TENANT_ID : input.tenantId();
         if (definition.globalScope != input.globalScope() || !definition.ownerTenant.id.equals(requestedOwner)) {
             throw new BadRequestException("Work item scope and owner tenant cannot be changed");
         }
@@ -104,12 +117,12 @@ public class WorkItemDefinitionService {
     }
 
     @Transactional
-    public WorkItemDefinitionEntity requireEffective(UUID definitionId, UUID tenantId) {
+    public WorkItemDefinitionEntity requireEffective(Long definitionId, Long tenantId) {
         return effectiveEntities(tenantId).stream().filter(item -> item.id.equals(definitionId)).findFirst()
                 .orElseThrow(() -> new BadRequestException("Selected work item is not available to this tenant"));
     }
 
-    private List<WorkItemDefinitionEntity> effectiveEntities(UUID tenantId) {
+    private List<WorkItemDefinitionEntity> effectiveEntities(Long tenantId) {
         Map<String, WorkItemDefinitionEntity> effective = WorkItemDefinitionEntity
                 .<WorkItemDefinitionEntity>list("globalScope = true and active = true order by type")
                 .stream().collect(Collectors.toMap(item -> item.normalizedType, Function.identity(), (a, b) -> a, LinkedHashMap::new));
@@ -132,7 +145,7 @@ public class WorkItemDefinitionService {
                         transition.fromStatus.normalizedCode + "->" + transition.toStatus.normalizedCode,
                         Function.identity()));
         Map<String, WorkItemStatusEntity> statuses = new HashMap<>();
-        for (StatusInput source : input.statuses()) {
+        for (StatusInput source : REQUIRED_STATUSES) {
             String normalizedCode = normalize(source.code());
             WorkItemStatusEntity status = existingStatuses.remove(normalizedCode);
             boolean newStatus = status == null;
@@ -176,15 +189,8 @@ public class WorkItemDefinitionService {
         if (blank(input.displayName()) || input.displayName().trim().length() > 160)
             throw new BadRequestException("Display name is required and must not exceed 160 characters");
         if (!input.globalScope() && input.tenantId() == null) throw new BadRequestException("tenantId is required for an override");
-        if (input.statuses() == null || input.statuses().isEmpty()) throw new BadRequestException("At least one status is required");
-        long initialCount = input.statuses().stream().filter(StatusInput::initialStatus).count();
-        if (initialCount != 1) throw new BadRequestException("Exactly one initial status is required");
-        Map<String, StatusInput> statuses = new HashMap<>();
-        for (StatusInput status : input.statuses()) {
-            if (blank(status.code()) || !status.code().trim().matches("[A-Za-z0-9][A-Za-z0-9_-]{0,63}") || blank(status.displayName()))
-                throw new BadRequestException("Every status requires a valid code and display name");
-            if (statuses.put(normalize(status.code()), status) != null) throw new BadRequestException("Status codes must be unique");
-        }
+        Map<String, StatusInput> statuses = REQUIRED_STATUSES.stream()
+                .collect(Collectors.toMap(status -> normalize(status.code()), Function.identity()));
         Map<String, Set<String>> edges = new HashMap<>();
         Set<String> pairs = new HashSet<>();
         for (TransitionInput transition : input.transitions() == null ? List.<TransitionInput>of() : input.transitions()) {
@@ -195,7 +201,7 @@ public class WorkItemDefinitionService {
             if (blank(transition.label())) throw new BadRequestException("Every transition requires a label");
             edges.computeIfAbsent(from, ignored -> new HashSet<>()).add(to);
         }
-        String initial = normalize(input.statuses().stream().filter(StatusInput::initialStatus).findFirst().orElseThrow().code());
+        String initial = normalize(AWAITING_FIRST_RESPONSE);
         Set<String> reached = new HashSet<>();
         Deque<String> queue = new ArrayDeque<>(); queue.add(initial);
         while (!queue.isEmpty()) { String next = queue.remove(); if (reached.add(next)) queue.addAll(edges.getOrDefault(next, Set.of())); }
@@ -218,7 +224,6 @@ public class WorkItemDefinitionService {
 
     private ApplicationUserEntity authorizedReader(String token) {
         ApplicationUserEntity actor = auth.requireEntity(token); auth.requireCompletedPasswordChange(actor);
-        if (actor.role != UserRole.GLOBAL_ADMIN && actor.role != UserRole.ADMIN) throw new ForbiddenException("Administrator role required");
         return actor;
     }
     private ApplicationUserEntity globalAdministrator(String token) {
@@ -226,19 +231,19 @@ public class WorkItemDefinitionService {
         if (actor.role != UserRole.GLOBAL_ADMIN) throw new ForbiddenException("GLOBAL_ADMIN role required");
         return actor;
     }
-    private TenantEntity requireTenant(UUID id) {
+    private TenantEntity requireTenant(Long id) {
         if (id == null) throw new BadRequestException("tenantId is required");
         TenantEntity tenant = TenantEntity.findById(id);
         if (tenant == null) throw new NotFoundException("Tenant not found");
         return tenant;
     }
-    private WorkItemDefinitionEntity requireDefinition(UUID id) {
+    private WorkItemDefinitionEntity requireDefinition(Long id) {
         WorkItemDefinitionEntity definition = WorkItemDefinitionEntity.findById(id);
         if (definition == null) throw new NotFoundException("Work item definition not found");
         definition.ownerTenant = TenantEntity.findById(definition.ownerTenant.id);
         return definition;
     }
-    private void ensureUnique(UUID ownerId, String type, UUID excluded) {
+    private void ensureUnique(Long ownerId, String type, Long excluded) {
         long count = excluded == null
                 ? WorkItemDefinitionEntity.count("ownerTenant.id = ?1 and normalizedType = ?2", ownerId, type)
                 : WorkItemDefinitionEntity.count("ownerTenant.id = ?1 and normalizedType = ?2 and id <> ?3", ownerId, type, excluded);
@@ -248,7 +253,7 @@ public class WorkItemDefinitionService {
     private static String normalize(String value) { return value.trim().toLowerCase(Locale.ROOT); }
     private static String canonical(String value) { return value.trim().toUpperCase(Locale.ROOT).replace('-', '_'); }
 
-    public record DefinitionInput(UUID tenantId, boolean globalScope, String type, String displayName,
+    public record DefinitionInput(Long tenantId, boolean globalScope, String type, String displayName,
                                   boolean active, List<StatusInput> statuses, List<TransitionInput> transitions) {}
     public record StatusInput(String code, String displayName, boolean initialStatus, boolean terminalStatus, int sortOrder) {}
     public record TransitionInput(String fromStatus, String toStatus, String label) {}

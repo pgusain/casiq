@@ -15,13 +15,12 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "application_user", uniqueConstraints =
         @UniqueConstraint(name = "uq_application_user_tenant_username", columnNames = {"tenant_id", "normalized_username"}))
 public class ApplicationUserEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id") public TenantEntity tenant;
     @Column(nullable = false, length = 128) public String username;
     @Column(name = "normalized_username", nullable = false, length = 128) public String normalizedUsername;

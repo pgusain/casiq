@@ -44,7 +44,7 @@ public class GmailEmailProviderConnector implements EmailProviderConnector {
     @Override
     public PollResult fetch(PollRequest request) {
         LOG.debugf("Starting Gmail fetch workAccountId=%s after=%s pageSize=%d",
-                request.workAccountId(), request.after(), pageSize);
+                (Object) request.workAccountId(), request.after(), pageSize);
         TokenState token = validAccessToken(request, Instant.now());
         String authorization = "Bearer " + token.accessToken();
         List<EmailMessage> messages = new ArrayList<>();
@@ -58,7 +58,7 @@ public class GmailEmailProviderConnector implements EmailProviderConnector {
             List<GmailMailboxClient.MessageReference> references =
                     page == null || page.messages() == null ? List.of() : page.messages();
             LOG.debugf("Gmail list page workAccountId=%s messages=%d hasNextPage=%s",
-                    request.workAccountId(), references.size(),
+                    (Object) request.workAccountId(), references.size(),
                     page != null && page.nextPageToken() != null && !page.nextPageToken().isBlank());
             for (GmailMailboxClient.MessageReference reference : references) {
                 if (reference == null || reference.id() == null) continue;
@@ -134,7 +134,7 @@ public class GmailEmailProviderConnector implements EmailProviderConnector {
     }
 
     private TokenState validAccessToken(
-            java.util.UUID workAccountId,
+            Long workAccountId,
             String refreshTokenValue,
             String accessToken,
             Instant accessTokenExpiresAt,

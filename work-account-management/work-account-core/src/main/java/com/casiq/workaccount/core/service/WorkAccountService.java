@@ -23,7 +23,6 @@ import jakarta.ws.rs.WebApplicationException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 
 @ApplicationScoped
 public class WorkAccountService {
@@ -32,7 +31,7 @@ public class WorkAccountService {
     @Inject WorkItemWorkflowService workflows;
 
     @Transactional
-    public List<WorkAccountView> list(String rawToken, UUID requestedTenantId) {
+    public List<WorkAccountView> list(String rawToken, Long requestedTenantId) {
         ApplicationUserEntity actor = administrator(rawToken);
         List<WorkAccountEntity> accounts;
         if (actor.role == UserRole.GLOBAL_ADMIN) {
@@ -55,8 +54,8 @@ public class WorkAccountService {
     }
 
     @Transactional
-    public WorkAccountView create(String rawToken, UUID requestedTenantId, String emailId,
-                                  String providerCode, UUID workItemId) {
+    public WorkAccountView create(String rawToken, Long requestedTenantId, String emailId,
+                                  String providerCode, Long workItemId) {
         ApplicationUserEntity actor = administrator(rawToken);
         TenantEntity tenant = targetTenant(actor, requestedTenantId);
         String normalizedEmail = normalizeEmail(emailId);
@@ -88,8 +87,8 @@ public class WorkAccountService {
     }
 
     @Transactional
-    public WorkAccountView update(String rawToken, UUID accountId, String emailId,
-                                  String providerCode, UUID workItemId) {
+    public WorkAccountView update(String rawToken, Long accountId, String emailId,
+                                  String providerCode, Long workItemId) {
         ApplicationUserEntity actor = administrator(rawToken);
         WorkAccountEntity account = manageable(actor, accountId);
         String normalizedEmail = normalizeEmail(emailId);
@@ -115,7 +114,7 @@ public class WorkAccountService {
     }
 
     @Transactional
-    public WorkAccountTarget requireManageable(String rawToken, UUID accountId) {
+    public WorkAccountTarget requireManageable(String rawToken, Long accountId) {
         ApplicationUserEntity actor = administrator(rawToken);
         WorkAccountEntity account = manageable(actor, accountId);
         if (!account.tenant.active) throw new BadRequestException("Tenant is inactive");
@@ -123,14 +122,14 @@ public class WorkAccountService {
     }
 
     @Transactional
-    public WorkAccountView completeGmailConnection(UUID accountId, String connectedEmailId,
+    public WorkAccountView completeGmailConnection(Long accountId, String connectedEmailId,
                                                    String accessToken, String refreshToken,
                                                    Instant accessTokenExpiresAt) {
         WorkAccountEntity account = WorkAccountEntity.findById(accountId);
         if (account == null) throw new NotFoundException("Work account not found");
         account.tenant = TenantEntity.findById(account.tenant.id);
         account.workItemDefinition = WorkItemDefinitionEntity.findById(account.workItemDefinition.id);
-        account.provider = EmailProviderEntity.findById(account.provider.code);
+        account.provider = EmailProviderEntity.findById(account.provider.id);
         if (!"GOOGLE".equals(account.provider.code)) {
             throw new BadRequestException("Work account provider is not GOOGLE");
         }
@@ -164,7 +163,7 @@ public class WorkAccountService {
         return actor;
     }
 
-    private WorkAccountEntity manageable(ApplicationUserEntity actor, UUID accountId) {
+    private WorkAccountEntity manageable(ApplicationUserEntity actor, Long accountId) {
         WorkAccountEntity account = WorkAccountEntity.findById(accountId);
         if (account == null) throw new NotFoundException("Work account not found");
         initializeReferences(account);
@@ -177,11 +176,11 @@ public class WorkAccountService {
     private void initializeReferences(WorkAccountEntity account) {
         account.tenant = TenantEntity.findById(account.tenant.id);
         account.workItemDefinition = WorkItemDefinitionEntity.findById(account.workItemDefinition.id);
-        account.provider = EmailProviderEntity.findById(account.provider.code);
+        account.provider = EmailProviderEntity.findById(account.provider.id);
     }
 
-    private TenantEntity targetTenant(ApplicationUserEntity actor, UUID requestedTenantId) {
-        UUID tenantId = actor.role == UserRole.GLOBAL_ADMIN ? requestedTenantId : actor.tenant.id;
+    private TenantEntity targetTenant(ApplicationUserEntity actor, Long requestedTenantId) {
+        Long tenantId = actor.role == UserRole.GLOBAL_ADMIN ? requestedTenantId : actor.tenant.id;
         if (actor.role != UserRole.GLOBAL_ADMIN) assertOwnTenant(actor, requestedTenantId);
         if (tenantId == null) throw new BadRequestException("tenantId is required for GLOBAL_ADMIN");
         TenantEntity tenant = TenantEntity.findById(tenantId);
@@ -190,13 +189,13 @@ public class WorkAccountService {
         return tenant;
     }
 
-    private void assertOwnTenant(ApplicationUserEntity actor, UUID requestedTenantId) {
+    private void assertOwnTenant(ApplicationUserEntity actor, Long requestedTenantId) {
         if (requestedTenantId != null && !actor.tenant.id.equals(requestedTenantId)) {
             throw new ForbiddenException("Tenant is outside your administration scope");
         }
     }
 
-    private void ensureUnique(UUID tenantId, String normalizedEmail, UUID excludedId) {
+    private void ensureUnique(Long tenantId, String normalizedEmail, Long excludedId) {
         long count = excludedId == null
                 ? WorkAccountEntity.count("tenant.id = ?1 and normalizedEmailId = ?2", tenantId, normalizedEmail)
                 : WorkAccountEntity.count("tenant.id = ?1 and normalizedEmailId = ?2 and id <> ?3",
@@ -219,10 +218,10 @@ public class WorkAccountService {
         return WorkAccountView.from(account, polling(account.id));
     }
 
-    private EmailPollingConfigEntity polling(UUID accountId) {
+    private EmailPollingConfigEntity polling(Long accountId) {
         EmailPollingConfigEntity config = EmailPollingConfigEntity.find("workAccount.id", accountId).firstResult();
         if (config == null) throw new IllegalStateException("Email polling configuration is missing");
-        config.provider = EmailProviderEntity.findById(config.provider.code);
+        config.provider = EmailProviderEntity.findById(config.provider.id);
         return config;
     }
 
@@ -233,6 +232,6 @@ public class WorkAccountService {
         return provider;
     }
 
-    public record WorkAccountTarget(UUID id, String emailId, String provider) {}
+    public record WorkAccountTarget(Long id, String emailId, String provider) {}
     public record EmailProviderView(String code, String displayName) {}
 }

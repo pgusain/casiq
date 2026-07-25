@@ -20,7 +20,6 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 
 import java.util.List;
-import java.util.UUID;
 
 @Path("/api/v1/work-accounts")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -31,7 +30,7 @@ public class WorkAccountResource {
     @GET
     public List<WorkAccountView> list(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @QueryParam("tenantId") UUID tenantId) {
+            @QueryParam("tenantId") Long tenantId) {
         return workAccounts.list(token, tenantId);
     }
 
@@ -53,14 +52,14 @@ public class WorkAccountResource {
     @Path("/{id}")
     public WorkAccountView update(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("id") UUID id,
+            @PathParam("id") Long id,
             @Valid @NotNull WorkAccountRequest request) {
         return workAccounts.update(token, id, request.emailId(), request.provider(), request.workItemId());
     }
 
     public record WorkAccountRequest(
-            UUID tenantId,
+            Long tenantId,
             @NotBlank @Email @Size(max = 320) String emailId,
             @NotBlank @Size(max = 32) String provider,
-            @NotNull UUID workItemId) {}
+            @NotNull Long workItemId) {}
 }

@@ -18,7 +18,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
 import java.util.List;
-import java.util.UUID;
 
 @Path("/api/v1/users")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -44,7 +43,7 @@ public class UserAdministrationResource {
     @Path("/{id}")
     public UserView update(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("id") UUID id,
+            @PathParam("id") Long id,
             @Valid @NotNull UpdateUserRequest request) {
         return users.update(token, id, request.username(), request.firstName(),
                 request.lastName(), request.role(), request.active());
@@ -54,7 +53,7 @@ public class UserAdministrationResource {
     @Path("/{id}/reset-password")
     public UserView resetPassword(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("id") UUID id,
+            @PathParam("id") Long id,
             @Valid @NotNull ResetPasswordRequest request) {
         return users.resetPassword(token, id, request.temporaryPassword());
     }

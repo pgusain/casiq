@@ -49,6 +49,12 @@ mvn -N flyway:migrate
 mvn -N flyway:validate
 ```
 
+For the consolidated baseline, recreate the entire database (including removal of
+the old `flyway_schema_history` table) before starting the application. Do not run
+Flyway repair against a database that contains an earlier development version of
+`V1`; the current baseline deliberately represents the complete fresh-install
+schema and seed state.
+
 No default administrator password is committed. Flyway creates the configured
 account as `GLOBAL_ADMIN` with `must_change_password = true`; the user must replace
 the temporary deployment password immediately after the first login.
@@ -105,14 +111,16 @@ themselves, and the application preserves at least one active `GLOBAL_ADMIN`.
 | `PUT /api/v1/tenants/{id}` | Update a tenant (`GLOBAL_ADMIN` only) |
 | `GET /api/v1/work-items/definitions` | List all global definitions and tenant overrides (`GLOBAL_ADMIN` only) |
 | `POST /api/v1/work-items/definitions` | Create a CASIQ-wide definition or tenant override (`GLOBAL_ADMIN` only) |
-| `PUT /api/v1/work-items/definitions/{id}` | Update a definition's display settings and status graph (`GLOBAL_ADMIN` only) |
+| `PUT /api/v1/work-items/definitions/{id}` | Update a definition's display settings and transition graph (`GLOBAL_ADMIN` only) |
 | `GET /api/v1/work-items/effective?tenantId={id}` | Resolve active global definitions with tenant overrides |
 | `GET /api/v1/work-items/assignments?tenantId={id}` | List tenant status and transition assignments (`GLOBAL_ADMIN`/`ADMIN`) |
 | `POST /api/v1/work-items/assignments` | Assign a status or transition to a user in the same tenant |
 | `DELETE /api/v1/work-items/assignments/{type}/{id}` | Remove a status or transition assignment |
-| `GET /api/v1/work-items/my-work` | Page and sort assigned non-terminal work, with type, status, email, and completed-work filters |
+| `GET /api/v1/work-items/my-work` | Page and sort work with `MY`, `OTHER`, or `ALL` queue scope plus type, status, email, and terminal filters |
 | `GET /api/v1/work-items/my-work/status-summary` | Count all accessible work items by status for the current filters |
 | `GET /api/v1/work-items/executions/{id}` | Open an assigned work item with its complete inbound/outbound communication timeline |
+| `POST /api/v1/work-items/executions/{id}/pick?force={boolean}` | Atomically assign a work item to the current user or explicitly take it over |
+| `PUT /api/v1/work-items/executions/{id}/type` | Change an actionable work item's effective type while preserving its current status |
 | `POST /api/v1/work-items/executions/{id}/notes` | Add a tenant-internal note to an assigned work item |
 | `POST /api/v1/work-items/executions/{id}/documents` | Upload an internal-team document as multipart form data |
 | `GET /api/v1/work-items/executions/{id}/documents/{documentId}` | Download an authorized work-item attachment |
@@ -130,14 +138,18 @@ is running.
 ## Work-item graphs
 
 The consolidated baseline creates definition, status-node, and
-directed-transition tables. It also provides CASIQ-wide `INCOME_TAX` and `GST`
-starter graphs.
+directed-transition tables. Every definition automatically receives
+`AWAITING_FIRST_RESPONSE`, `READY_TO_PICK`, `IN_PROGRESS`,
+`AWAITING_CUSTOMER_RESPONSE`, `CANCELLED`, and `COMPLETED`.
+`AWAITING_FIRST_RESPONSE` is initial, while
+`CANCELLED` and `COMPLETED` are terminal. Administrators define the directed
+transitions between these fixed statuses. CASIQ-wide `INCOME_TAX` and `GST`
+starter graphs are provided.
 
 A CASIQ-wide definition is available to every tenant. A tenant definition with the
 same type is an override and shadows the CASIQ-wide version only for that tenant.
-Exactly one initial status is required; status codes must be unique, transitions
-must reference existing nodes, terminal nodes cannot have outgoing transitions,
-and every node must be reachable from the initial node. The authenticated dashboard
+Transitions must reference the fixed nodes, terminal nodes cannot have outgoing
+transitions, and every node must be reachable from the initial node. The authenticated dashboard
 contains the global-admin graph editor and uses effective definitions in the
 work-account dropdown.
 
@@ -147,8 +159,8 @@ assign an entire status or one specific transition to an active user in the same
 tenant. Status ownership permits every outgoing transition from that status;
 transition ownership permits only the assigned activity. Every completed transition
 is recorded with its performer, previous status, next status, and timestamp. The
-dashboard exposes assignment management to administrators and a tenant-isolated
-**My work** queue to all authenticated roles.
+dashboard exposes assignment management to administrators and tenant-isolated
+**My tasks** and **Other tasks** queues to all authenticated roles.
 
 ## Gmail connector
 
@@ -224,7 +236,22 @@ claims at most `CONVERSATION_WORK_ITEM_BATCH_SIZE` records with
 retry time. Scheduler interval, batch size, lock duration, and retry delay use the
 `CONVERSATION_WORK_ITEM_*` settings in `.env.example`.
 
-The My Work screen excludes terminal statuses by default. Users can filter by
+The work-item screen only lists non-terminal tasks for which the current user has
+a status or transition assignment applicable to the task's current status. It
+separates those actionable tasks into items assigned to the current user and
+unassigned or other-owned items. Opening an unassigned task atomically assigns it to the
+current user. If another user already owns it, the UI names that user and offers
+an explicit takeover or read-only view. Picks, forced takeovers, type changes,
+transitions, internal notes, document uploads, and outbound replies use the
+execution's optimistic version before checking or changing ownership. Concurrent
+stale updates return HTTP 409 so the caller can refresh and retry. A forced
+takeover replaces the current assignee even when the task is already owned.
+An actionable, non-terminal work item can also change type from its detail view.
+The current fixed status and assignee are retained, while allowed transitions and
+queue visibility are immediately recalculated from the selected type's tenant
+assignments. This changes only that execution; the work account's default type is
+not modified.
+The screen excludes terminal statuses by default. Users can filter by
 work-item type, current status, or work-account email prefix and can explicitly include
 completed work. Results support page sizes from 1 to 100 and sorting by last
 update, creation time, email, work-item type, or status in either direction.
@@ -267,7 +294,9 @@ database column limits while preserving attachment idempotency.
 Every inbound or outbound conversation is linked to its work-item execution. A
 later inbound
 email with the same provider thread ID and work account is attached to the existing
-work item instead of creating a duplicate. Work-item documents are classified as
+work item instead of creating a duplicate. When that work item is awaiting a
+customer response, the inbound processor pessimistically locks it and automatically
+moves it to `READY_TO_PICK` without changing its assignee. Work-item documents are classified as
 `INBOUND`, `INTERNAL`, or `OUTBOUND`; the UI groups them by that origin. Inbound
 and outbound documents retain their source conversation ID, so every email in the
 timeline displays its corresponding downloadable attachments. The document side
@@ -279,7 +308,7 @@ outbound document rows record exactly which files were sent.
 Local development defaults to `ATTACHMENT_STORAGE_PROVIDER=local` and stores files
 below `ATTACHMENT_LOCAL_ROOT`, partitioned by tenant ID. For production, build and
 run with `ATTACHMENT_STORAGE_PROVIDER=s3`. S3 mode derives a separate bucket name
-for every tenant as `<ATTACHMENT_S3_BUCKET_PREFIX><tenant UUID>`. Provision those
+for every tenant as `<ATTACHMENT_S3_BUCKET_PREFIX><tenant ID>`. Provision those
 buckets before use and grant the application `s3:PutObject` and `s3:GetObject`
 only for the applicable tenant buckets. The S3 client reads `AWS_REGION` and uses
 the AWS SDK default credential provider chain; static cloud credentials are not
@@ -307,15 +336,44 @@ If a retained conversation exists but has no HTML body, Casiq downloads the full
 provider message, hydrates `content_html`, and renders that HTML in the sandboxed
 work-item communication frame.
 
-The retention scheduler deletes processed materialized conversations after
-`CONVERSATION_RETENTION_HOURS` (180 days by default), in bounded batches using
+The retention scheduler can delete processed materialized conversations after
+`CONVERSATION_RETENTION_HOURS` (180 days by default). It is disabled by default
+and, when enabled, operates in bounded batches using
 database row locks and `SKIP LOCKED` so multiple application instances can run it
 safely. Cached bodies are cleared after `WORK_ITEM_CACHE_FALLBACK_HOURS`.
 Provider message IDs remain in the durable ledger, preventing an old message from
 being ingested again after its materialized row has been purged. New messages on
 an existing provider thread continue to attach to the original work item.
-Set `WORK_ITEM_PROVIDER_READ_ENABLED=false` to use metadata/cache only, or
-`CONVERSATION_RETENTION_ENABLED=false` to disable automatic purging.
+Set `WORK_ITEM_PROVIDER_READ_ENABLED=false` to use metadata/cache only. Set
+`CONVERSATION_RETENTION_ENABLED=true` only when automatic conversation cleanup
+should be enabled.
+
+### Completed work-item archive
+
+The work-item module can run a weekly archive pass at 02:00 UTC every Sunday.
+It is disabled by default and claims only `COMPLETED` executions in bounded batches using
+`FOR UPDATE SKIP LOCKED` and an expiring lease, so multiple application
+instances cannot archive the same execution concurrently. Failed uploads release
+the lease and are retried after the configured delay.
+
+Each archive is one consolidated JSON object containing the execution snapshot,
+status activity, inbound and outbound communication timeline, internal notes,
+document metadata, and document content. The object key is
+`work-items/<execution ID>.json` inside the tenant's configured storage. In S3
+mode this is the tenant-specific bucket described above; local development uses
+the same logical layout below `ATTACHMENT_LOCAL_ROOT`.
+
+Detail rows are purged only after the JSON write succeeds. The primary
+`work_item_execution` row remains available for tenant search and list views and
+is marked with `data_migrated`, the archive provider/key, and archive timestamp.
+Opening an archived execution transparently loads its read-only details and
+document downloads from the JSON object. `CANCELLED` and other non-completed
+executions are not archived.
+
+The schedule, time zone, claim size, lease, retry delay, and worker count use the
+`WORK_ITEM_ARCHIVE_*` settings in `.env.example`. Set
+`WORK_ITEM_ARCHIVE_ENABLED=true` only when completed work-item archival and
+detail purging should be enabled.
 
 The consolidated baseline includes composite indexes for tenant work queues,
 definition/status filters, normalized work-account

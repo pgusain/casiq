@@ -14,7 +14,10 @@ import com.casiq.workaccount.core.persistence.WorkAccountEntity;
 import com.casiq.workaccount.core.polling.EmailPollingStateService;
 import com.casiq.workitem.conversation.ConversationWorkItemProcessor;
 import com.casiq.workitem.conversation.ConversationWorkItemStateService;
+import com.casiq.workitem.archive.WorkItemArchiveProcessor;
+import com.casiq.workitem.archive.WorkItemArchiveStateService;
 import com.casiq.workitem.persistence.WorkItemExecutionEntity;
+import com.casiq.workitem.persistence.WorkItemStatusEntity;
 import com.casiq.workitem.service.WorkItemEmailContentResolver;
 import io.quarkus.hibernate.orm.panache.Panache;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -50,6 +53,8 @@ class UserManagementResourceTest {
     @Inject EmailPollingStateService pollingState;
     @Inject ConversationWorkItemStateService conversationWorkItemState;
     @Inject ConversationWorkItemProcessor conversationWorkItemProcessor;
+    @Inject WorkItemArchiveStateService workItemArchiveState;
+    @Inject WorkItemArchiveProcessor workItemArchiveProcessor;
     @Inject WorkItemEmailContentResolver emailContentResolver;
 
     @Test
@@ -90,27 +95,27 @@ class UserManagementResourceTest {
         String adminTenantId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/auth/me")
                 .then().statusCode(200)
-                .extract().path("tenantId");
+                .extract().jsonPath().getString("tenantId");
         String adminUserId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/auth/me")
                 .then().statusCode(200)
-                .extract().path("id");
+                .extract().jsonPath().getString("id");
 
         String incomeTaxWorkItemId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .queryParam("tenantId", adminTenantId)
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200)
-                .extract().path("find { it.type == 'INCOME_TAX' }.id");
+                .extract().jsonPath().getString("find { it.type == 'INCOME_TAX' }.id");
         String gstWorkItemId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .queryParam("tenantId", adminTenantId)
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200)
-                .extract().path("find { it.type == 'GST' }.id");
+                .extract().jsonPath().getString("find { it.type == 'GST' }.id");
         String gstInitialStatusId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .queryParam("tenantId", adminTenantId)
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200)
-                .extract().path("find { it.type == 'GST' }.statuses.find { it.initialStatus }.id");
+                .extract().jsonPath().getString("find { it.type == 'GST' }.statuses.find { it.initialStatus }.id");
 
         Response workAccountCreated = given().contentType(ContentType.JSON)
                 .cookie(AuthResource.SESSION_COOKIE, adminSession)
@@ -144,12 +149,12 @@ class UserManagementResourceTest {
                 .then().statusCode(200)
                 .body("authorizationUrl", containsString("login_hint=tax%40example.com"));
 
-        workAccounts.completeGmailConnection(UUID.fromString(workAccountId), "tax@example.com",
+        workAccounts.completeGmailConnection(Long.valueOf(workAccountId), "tax@example.com",
                 "stored-access-token", "stored-refresh-token", Instant.now().plusSeconds(3600));
         QuarkusTransaction.requiringNew().run(() -> {
-            WorkAccountEntity storedAccount = WorkAccountEntity.findById(UUID.fromString(workAccountId));
+            WorkAccountEntity storedAccount = WorkAccountEntity.findById(Long.valueOf(workAccountId));
             EmailPollingConfigEntity polling = EmailPollingConfigEntity.find(
-                    "workAccount.id", UUID.fromString(workAccountId)).firstResult();
+                    "workAccount.id", Long.valueOf(workAccountId)).firstResult();
             assertEquals("stored-refresh-token", storedAccount.refreshToken);
             assertEquals("GOOGLE", storedAccount.provider.code);
             assertNotNull(polling);
@@ -158,9 +163,9 @@ class UserManagementResourceTest {
             assertNotNull(polling.accessTokenExpiresAt);
             assertNotNull(polling.nextRefreshAt);
         });
-        UUID pollingConfigId = QuarkusTransaction.requiringNew().call(() ->
+        Long pollingConfigId = QuarkusTransaction.requiringNew().call(() ->
                 ((EmailPollingConfigEntity) EmailPollingConfigEntity.find(
-                        "workAccount.id", UUID.fromString(workAccountId)).firstResult()).id);
+                        "workAccount.id", Long.valueOf(workAccountId)).firstResult()).id);
         var firstClaim = pollingState.claimDue("test-instance-one", Instant.now().plusSeconds(1));
         assertTrue(firstClaim.contains(pollingConfigId));
         var competingClaim = pollingState.claimDue("test-instance-two", Instant.now().plusSeconds(1));
@@ -174,8 +179,8 @@ class UserManagementResourceTest {
             assertNotNull(polling.nextRefreshAt);
         });
 
-        UUID conversationId = QuarkusTransaction.requiringNew().call(() -> {
-            WorkAccountEntity account = WorkAccountEntity.findById(UUID.fromString(workAccountId));
+        Long conversationId = QuarkusTransaction.requiringNew().call(() -> {
+            WorkAccountEntity account = WorkAccountEntity.findById(Long.valueOf(workAccountId));
             WorkAccountConversationEntity conversation = new WorkAccountConversationEntity();
             conversation.tenant = account.tenant;
             conversation.workAccount = account;
@@ -209,8 +214,8 @@ class UserManagementResourceTest {
         WorkItemEmailContentResolver.ResolvedContent tableContent =
                 emailContentResolver.resolve(
                         new WorkItemEmailContentResolver.EmailReference(
-                                UUID.fromString(adminTenantId),
-                                UUID.fromString(workAccountId),
+                                Long.valueOf(adminTenantId),
+                                Long.valueOf(workAccountId),
                                 "GOOGLE",
                                 QuarkusTransaction.requiringNew().call(() ->
                                         ((WorkAccountConversationEntity)
@@ -233,10 +238,10 @@ class UserManagementResourceTest {
                     WorkItemExecutionEntity.find("conversationId", conversationId).firstResult();
             assertNotNull(execution);
             conversationExecutionId.set(execution.id.toString());
-            assertEquals(UUID.fromString(workAccountId), execution.workAccountId);
+            assertEquals(Long.valueOf(workAccountId), execution.workAccountId);
             assertEquals("tax@example.com", execution.workAccountEmail);
             assertEquals("GST", execution.definition.type);
-            assertEquals("NEW", execution.currentStatus.code);
+            assertEquals("AWAITING_FIRST_RESPONSE", execution.currentStatus.code);
             assertEquals("GST filing", execution.emailSubject);
             assertEquals("sender@example.com", execution.emailSender);
             assertEquals(null, execution.emailContentHtml);
@@ -248,12 +253,25 @@ class UserManagementResourceTest {
                     .setParameter(1, conversationId)
                     .getSingleResult();
             assertNotNull(processedAt);
+
+            WorkItemStatusEntity awaitingCustomer = WorkItemStatusEntity.find(
+                    "definition.id = ?1 and code = ?2",
+                    execution.definition.id,
+                    "AWAITING_CUSTOMER_RESPONSE").firstResult();
+            ApplicationUserEntity assignedUser =
+                    ApplicationUserEntity.findById(Long.valueOf(adminUserId));
+            assertNotNull(awaitingCustomer);
+            assertNotNull(assignedUser);
+            execution.currentStatus = awaitingCustomer;
+            execution.assignedUser = assignedUser;
+            execution.assignedAt = Instant.now();
+            execution.updatedAt = execution.assignedAt;
         });
         assertFalse(conversationWorkItemState.claimDue(
                 "work-item-instance-three", Instant.now().plusSeconds(1)).contains(conversationId));
 
-        UUID followUpConversationId = QuarkusTransaction.requiringNew().call(() -> {
-            WorkAccountEntity account = WorkAccountEntity.findById(UUID.fromString(workAccountId));
+        Long followUpConversationId = QuarkusTransaction.requiringNew().call(() -> {
+            WorkAccountEntity account = WorkAccountEntity.findById(Long.valueOf(workAccountId));
             WorkAccountConversationEntity conversation = new WorkAccountConversationEntity();
             conversation.tenant = account.tenant;
             conversation.workAccount = account;
@@ -298,9 +316,15 @@ class UserManagementResourceTest {
             assertNotNull(followUp.workItemExecution);
             assertEquals(conversationExecutionId.get(),
                     followUp.workItemExecution.id.toString());
+            assertEquals(
+                    "READY_TO_PICK",
+                    followUp.workItemExecution.currentStatus.code);
+            assertEquals(
+                    Long.valueOf(adminUserId),
+                    followUp.workItemExecution.assignedUser.id);
             assertEquals(1L, WorkItemExecutionEntity.count(
                     "workAccountId = ?1 and definition.type = ?2 and conversationId is not null",
-                    UUID.fromString(workAccountId), "GST"));
+                    Long.valueOf(workAccountId), "GST"));
         });
 
         given().contentType(ContentType.JSON)
@@ -324,9 +348,9 @@ class UserManagementResourceTest {
                 .body("documents[0].filename", equalTo("gst-filing.pdf"))
                 .body("documents[0].origin", equalTo("INBOUND"))
                 .body("documents.sourceConversationId",
-                        hasItem(conversationId.toString()))
+                        hasItem(conversationId.intValue()))
                 .body("documents.sourceConversationId",
-                        hasItem(followUpConversationId.toString()))
+                        hasItem(followUpConversationId.intValue()))
                 .body("internalNotes.size()", equalTo(0));
         String documentId = emailWorkItem.jsonPath().getString("documents[0].id");
 
@@ -339,7 +363,7 @@ class UserManagementResourceTest {
 
         QuarkusTransaction.requiringNew().run(() -> {
             WorkItemExecutionEntity execution = WorkItemExecutionEntity.findById(
-                    UUID.fromString(conversationExecutionId.get()));
+                    Long.valueOf(conversationExecutionId.get()));
             execution.conversationId = null;
             Panache.getEntityManager().flush();
             WorkAccountConversationEntity.delete(
@@ -356,12 +380,12 @@ class UserManagementResourceTest {
                 .body("communications.subject", hasItem("Re: GST filing"))
                 .body("documents.size()", equalTo(2))
                 .body("documents.sourceConversationId",
-                        hasItem(conversationId.toString()))
+                        hasItem(conversationId.intValue()))
                 .body("documents.sourceConversationId",
-                        hasItem(followUpConversationId.toString()));
+                        hasItem(followUpConversationId.intValue()));
 
-        UUID postPurgeConversationId = QuarkusTransaction.requiringNew().call(() -> {
-            WorkAccountEntity account = WorkAccountEntity.findById(UUID.fromString(workAccountId));
+        Long postPurgeConversationId = QuarkusTransaction.requiringNew().call(() -> {
+            WorkAccountEntity account = WorkAccountEntity.findById(Long.valueOf(workAccountId));
             WorkAccountConversationEntity conversation = new WorkAccountConversationEntity();
             conversation.tenant = account.tenant;
             conversation.workAccount = account;
@@ -451,6 +475,87 @@ class UserManagementResourceTest {
         given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/work-accounts/providers")
                 .then().statusCode(200).body("code", hasItem("GOOGLE")).body("code", hasItem("MICROSOFT"));
+
+        Long archivedExecutionId = Long.valueOf(conversationExecutionId.get());
+        QuarkusTransaction.requiringNew().run(() -> {
+            WorkItemExecutionEntity execution =
+                    WorkItemExecutionEntity.findById(archivedExecutionId);
+            WorkItemStatusEntity completed = WorkItemStatusEntity.find(
+                    "definition.id = ?1 and code = ?2",
+                    execution.definition.id,
+                    "COMPLETED").firstResult();
+            assertNotNull(completed);
+            execution.currentStatus = completed;
+            execution.updatedAt = Instant.now();
+        });
+        String archiveOwner = "work-item-archive-test";
+        assertTrue(workItemArchiveState.claimCompleted(
+                        archiveOwner, Instant.now().plusSeconds(1))
+                .contains(archivedExecutionId));
+        workItemArchiveProcessor.archive(archivedExecutionId, archiveOwner);
+        QuarkusTransaction.requiringNew().run(() -> {
+            WorkItemExecutionEntity execution =
+                    WorkItemExecutionEntity.findById(archivedExecutionId);
+            assertTrue(execution.dataMigrated);
+            assertNotNull(execution.archivedAt);
+            assertTrue(execution.archiveStorageKey.endsWith(
+                    "work-items/" + archivedExecutionId + ".json"));
+            Number remainingDetails = (Number) Panache.getEntityManager()
+                    .createNativeQuery("""
+                            SELECT
+                              (SELECT COUNT(*) FROM work_item_communication WHERE execution_id = ?1)
+                              + (SELECT COUNT(*) FROM work_item_document WHERE execution_id = ?1)
+                              + (SELECT COUNT(*) FROM work_item_internal_note WHERE execution_id = ?1)
+                              + (SELECT COUNT(*) FROM work_item_activity WHERE execution_id = ?1)
+                            """)
+                    .setParameter(1, archivedExecutionId)
+                    .getSingleResult();
+            assertEquals(0L, remainingDetails.longValue());
+        });
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get(
+                        "/api/v1/work-items/executions/{executionId}",
+                        archivedExecutionId)
+                .then().statusCode(200)
+                .body("execution.dataMigrated", equalTo(true))
+                .body("execution.currentStatus", equalTo("COMPLETED"))
+                .body("communications.size()", equalTo(3))
+                .body("communications.contentHtml",
+                        hasItem(containsString("<strong>")))
+                .body("documents.size()", equalTo(3))
+                .body("documents.origin", hasItem("INTERNAL"))
+                .body("documents.sourceConversationId",
+                        hasItem(conversationId.intValue()))
+                .body("internalNotes.size()", equalTo(1))
+                .body("internalNotes[0].content",
+                        containsString("awaiting confirmation"));
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .when().get(
+                        "/api/v1/work-items/executions/{executionId}/documents/{documentId}",
+                        archivedExecutionId,
+                        internalDocumentId)
+                .then().statusCode(200)
+                .body(equalTo("internal-team-document"));
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(Map.of("content", "Archived details must remain immutable."))
+                .when().post(
+                        "/api/v1/work-items/executions/{executionId}/notes",
+                        archivedExecutionId)
+                .then().statusCode(409)
+                .body("error", containsString("read-only"));
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .multiPart(
+                        "file",
+                        "late-document.txt",
+                        "must-not-be-stored".getBytes(
+                                java.nio.charset.StandardCharsets.UTF_8),
+                        "text/plain")
+                .when().post(
+                        "/api/v1/work-items/executions/{executionId}/documents",
+                        archivedExecutionId)
+                .then().statusCode(409)
+                .body("error", containsString("read-only"));
 
         String tenantCode = "CLIENT-" + UUID.randomUUID().toString().substring(0, 8);
         Response tenantCreated = given().contentType(ContentType.JSON)
@@ -552,7 +657,7 @@ class UserManagementResourceTest {
         String administratorId = given().cookie(AuthResource.SESSION_COOKIE, session)
                 .when().get("/api/v1/auth/me")
                 .then().statusCode(200)
-                .extract().path("id");
+                .extract().jsonPath().getString("id");
 
         given().contentType(ContentType.JSON)
                 .cookie(AuthResource.SESSION_COOKIE, session)
@@ -598,16 +703,16 @@ class UserManagementResourceTest {
         String secondSession = login(secondAdmin, INITIAL_PASSWORD)
                 .then().statusCode(200).extract().cookie(AuthResource.SESSION_COOKIE);
 
-        UUID firstTenantId = tenantId(firstSession);
-        UUID secondTenantId = tenantId(secondSession);
+        Long firstTenantId = tenantId(firstSession);
+        Long secondTenantId = tenantId(secondSession);
         String firstDefinitionId = incomeTaxDefinitionId(firstSession);
         String secondDefinitionId = incomeTaxDefinitionId(secondSession);
 
-        UUID firstAccountId = createWorkAccount(
+        Long firstAccountId = createWorkAccount(
                 firstSession, firstTenantId, firstDefinitionId, "tenant-one-first@example.com");
-        UUID firstTenantSecondAccountId = createWorkAccount(
+        Long firstTenantSecondAccountId = createWorkAccount(
                 firstSession, firstTenantId, firstDefinitionId, "tenant-one-second@example.com");
-        UUID secondAccountId = createWorkAccount(
+        Long secondAccountId = createWorkAccount(
                 secondSession, secondTenantId, secondDefinitionId, "tenant-two-first@example.com");
 
         QuarkusTransaction.requiringNew().run(() -> {
@@ -638,7 +743,15 @@ class UserManagementResourceTest {
         Response global = given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, session)
                 .body(workItemBody(null, true, type))
                 .when().post("/api/v1/work-items/definitions");
-        global.then().statusCode(200).body("globalScope", equalTo(true)).body("statuses.size()", equalTo(3));
+        global.then().statusCode(200).body("globalScope", equalTo(true))
+                .body("statuses.size()", equalTo(6))
+                .body("statuses.code", org.hamcrest.Matchers.hasItems(
+                        "AWAITING_FIRST_RESPONSE",
+                        "READY_TO_PICK",
+                        "IN_PROGRESS",
+                        "AWAITING_CUSTOMER_RESPONSE",
+                        "CANCELLED",
+                        "COMPLETED"));
         String globalId = global.jsonPath().getString("id");
 
         Map<String, Object> updatedGlobal = workItemBody(null, true, type);
@@ -650,18 +763,19 @@ class UserManagementResourceTest {
         String tenantCode = "GRAPH-" + UUID.randomUUID().toString().substring(0, 8);
         String tenantId = given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, session)
                 .body(Map.of("companyCode", tenantCode, "displayName", "Graph tenant", "active", true))
-                .when().post("/api/v1/tenants").then().statusCode(200).extract().path("id");
+                .when().post("/api/v1/tenants").then().statusCode(200).extract().jsonPath().getString("id");
 
         Response override = given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, session)
                 .body(workItemBody(tenantId, false, type))
                 .when().post("/api/v1/work-items/definitions");
-        override.then().statusCode(200).body("globalScope", equalTo(false)).body("overridesDefinitionId", equalTo(globalId));
+        override.then().statusCode(200).body("globalScope", equalTo(false))
+                .body("overridesDefinitionId", equalTo(Integer.valueOf(globalId)));
         String overrideId = override.jsonPath().getString("id");
 
         given().cookie(AuthResource.SESSION_COOKIE, session).queryParam("tenantId", tenantId)
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200)
-                .body("find { it.type == '" + type + "' }.id", equalTo(overrideId));
+                .body("find { it.type == '" + type + "' }.id", equalTo(Integer.valueOf(overrideId)));
 
         Map<String, Object> invalid = workItemBody(null, true, "BROKEN_" + type);
         invalid.put("transitions", List.of());
@@ -676,24 +790,28 @@ class UserManagementResourceTest {
         String adminSession = login(admin, INITIAL_PASSWORD).then().statusCode(200)
                 .extract().cookie(AuthResource.SESSION_COOKIE);
         String tenantId = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
-                .when().get("/api/v1/auth/me").then().statusCode(200).extract().path("tenantId");
+                .when().get("/api/v1/auth/me").then().statusCode(200).extract().jsonPath().getString("tenantId");
 
         Response definition = given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/work-items/effective").then().statusCode(200)
                 .extract().response();
         String definitionId = definition.jsonPath().getString("find { it.type == 'INCOME_TAX' }.id");
+        String gstDefinitionId = definition.jsonPath().getString(
+                "find { it.type == 'GST' }.id");
+        String gstReadyStatusId = definition.jsonPath().getString(
+                "find { it.type == 'GST' }.statuses.find { it.code == 'READY_TO_PICK' }.id");
         String initialStatusId = definition.jsonPath().getString(
                 "find { it.type == 'INCOME_TAX' }.statuses.find { it.initialStatus }.id");
         String startTransitionId = definition.jsonPath().getString(
-                "find { it.type == 'INCOME_TAX' }.transitions.find { it.fromStatus == 'NEW' }.id");
+                "find { it.type == 'INCOME_TAX' }.transitions.find { it.fromStatus == 'AWAITING_FIRST_RESPONSE' }.id");
         String completeTransitionId = definition.jsonPath().getString(
-                "find { it.type == 'INCOME_TAX' }.transitions.find { it.fromStatus == 'IN_PROGRESS' }.id");
+                "find { it.type == 'INCOME_TAX' }.transitions.find { it.toStatus == 'COMPLETED' }.id");
 
         String processorId = given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .body(Map.of("companyCode", admin.companyCode(), "username", "workflow.processor",
                         "firstName", "Workflow", "lastName", "Processor",
                         "temporaryPassword", "WorkflowTemp-123", "role", "PROCESSOR"))
-                .when().post("/api/v1/users").then().statusCode(200).extract().path("id");
+                .when().post("/api/v1/users").then().statusCode(200).extract().jsonPath().getString("id");
 
         Response account = given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .body(Map.of("tenantId", tenantId, "emailId", "workflow@example.com",
@@ -720,6 +838,42 @@ class UserManagementResourceTest {
                 .body(Map.of("currentPassword", "WorkflowTemp-123", "newPassword", "WorkflowSecure-456"))
                 .when().post("/api/v1/auth/password").then().statusCode(200);
 
+        String secondProcessorId = given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(Map.of(
+                        "companyCode", admin.companyCode(),
+                        "username", "workflow.processor.two",
+                        "firstName", "Second",
+                        "lastName", "Processor",
+                        "temporaryPassword", "WorkflowTemp-789",
+                        "role", "PROCESSOR"))
+                .when().post("/api/v1/users").then().statusCode(200)
+                .extract().jsonPath().getString("id");
+        given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(assignmentBody(
+                        tenantId, definitionId, null,
+                        completeTransitionId, secondProcessorId))
+                .when().post("/api/v1/work-items/assignments")
+                .then().statusCode(200);
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .body(assignmentBody(
+                        tenantId, gstDefinitionId, gstReadyStatusId,
+                        null, secondProcessorId))
+                .when().post("/api/v1/work-items/assignments")
+                .then().statusCode(200);
+        String secondProcessorSession = login(
+                new Seed(admin.companyCode(), "workflow.processor.two"),
+                "WorkflowTemp-789")
+                .then().statusCode(200)
+                .extract().cookie(AuthResource.SESSION_COOKIE);
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .body(Map.of(
+                        "currentPassword", "WorkflowTemp-789",
+                        "newPassword", "WorkflowSecure-789"))
+                .when().post("/api/v1/auth/password").then().statusCode(200);
+
         Response myWork = given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .queryParam("page", 0)
                 .queryParam("size", 1)
@@ -734,26 +888,148 @@ class UserManagementResourceTest {
                 .body("sortDirection", equalTo("asc"))
                 .body("items[0].emailId", equalTo("workflow@example.com"))
                 .body("items[0].workItemNumber", org.hamcrest.Matchers.greaterThanOrEqualTo(100000))
-                .body("items[0].currentStatus", equalTo("NEW"))
-                .body("items[0].allowedTransitions[0].id", equalTo(startTransitionId));
+                .body("items[0].currentStatus", equalTo("AWAITING_FIRST_RESPONSE"))
+                .body("items[0].allowedTransitions[0].id", equalTo(Integer.valueOf(startTransitionId)));
         String executionId = myWork.jsonPath().getString("items[0].id");
+        long versionBeforeAssignment = QuarkusTransaction.requiringNew().call(() ->
+                ((WorkItemExecutionEntity) WorkItemExecutionEntity.findById(
+                        Long.valueOf(executionId))).version);
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .when().get("/api/v1/work-items/my-work/status-summary")
                 .then().statusCode(200)
-                .body("status", hasItem("NEW"))
-                .body("find { it.status == 'NEW' }.count", equalTo(1));
+                .body("status", hasItem("AWAITING_FIRST_RESPONSE"))
+                .body("find { it.status == 'AWAITING_FIRST_RESPONSE' }.count", equalTo(1));
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .when().post("/api/v1/work-items/executions/{executionId}/transitions/{transitionId}",
                         executionId, startTransitionId)
-                .then().statusCode(200).body("currentStatus", equalTo("IN_PROGRESS"));
+                .then().statusCode(200)
+                .body("currentStatus", equalTo("READY_TO_PICK"))
+                .body("assignedUsername", equalTo("workflow.processor"))
+                .body("assignedToCurrentUser", equalTo(true));
+        long versionAfterAssignment = QuarkusTransaction.requiringNew().call(() ->
+                ((WorkItemExecutionEntity) WorkItemExecutionEntity.findById(
+                        Long.valueOf(executionId))).version);
+        assertTrue(versionAfterAssignment > versionBeforeAssignment);
+
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .when().get("/api/v1/work-items/effective")
+                .then().statusCode(200)
+                .body("type", hasItem("GST"));
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .body(Map.of("definitionId", gstDefinitionId))
+                .when().put(
+                        "/api/v1/work-items/executions/{executionId}/type",
+                        executionId)
+                .then().statusCode(200)
+                .body("workItemType", equalTo("GST"))
+                .body("currentStatus", equalTo("READY_TO_PICK"))
+                .body("assignedUsername", equalTo("workflow.processor"))
+                .body("allowedTransitions.size()", equalTo(0));
+        long versionAfterTypeChange = QuarkusTransaction.requiringNew().call(() ->
+                ((WorkItemExecutionEntity) WorkItemExecutionEntity.findById(
+                        Long.valueOf(executionId))).version);
+        assertTrue(versionAfterTypeChange > versionAfterAssignment);
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .queryParam("queueScope", "MY")
+                .when().get("/api/v1/work-items/my-work")
+                .then().statusCode(200)
+                .body("totalElements", equalTo(0));
+        given().cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .queryParam("queueScope", "OTHER")
+                .when().get("/api/v1/work-items/my-work")
+                .then().statusCode(200)
+                .body("totalElements", equalTo(1))
+                .body("items[0].workItemType", equalTo("GST"));
+        given().cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .queryParam("force", true)
+                .when().post(
+                        "/api/v1/work-items/executions/{executionId}/pick",
+                        executionId)
+                .then().statusCode(200);
+        given().contentType(ContentType.JSON)
+                .cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .body(Map.of("definitionId", definitionId))
+                .when().put(
+                        "/api/v1/work-items/executions/{executionId}/type",
+                        executionId)
+                .then().statusCode(200)
+                .body("workItemType", equalTo("INCOME_TAX"))
+                .body("currentStatus", equalTo("READY_TO_PICK"))
+                .body("allowedTransitions.id",
+                        hasItem(Integer.valueOf(completeTransitionId)));
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .queryParam("force", true)
+                .when().post(
+                        "/api/v1/work-items/executions/{executionId}/pick",
+                        executionId)
+                .then().statusCode(200)
+                .body("execution.assignedUsername",
+                        equalTo("workflow.processor"));
+
+        // Forced takeover is allowed for another authenticated tenant user even
+        // when that user has no workflow transition assignment.
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .queryParam("force", true)
+                .when().post("/api/v1/work-items/executions/{executionId}/pick", executionId)
+                .then().statusCode(200)
+                .body("reassigned", equalTo(true))
+                .body("execution.assignedUsername", equalTo(admin.username()));
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .queryParam("queueScope", "MY")
+                .when().get("/api/v1/work-items/my-work")
+                .then().statusCode(200)
+                .body("totalElements", equalTo(0))
+                .body("items.size()", equalTo(0));
+        given().cookie(AuthResource.SESSION_COOKIE, adminSession)
+                .queryParam("queueScope", "MY")
+                .when().get("/api/v1/work-items/my-work/status-summary")
+                .then().statusCode(200)
+                .body("size()", equalTo(0));
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .queryParam("force", true)
+                .when().post("/api/v1/work-items/executions/{executionId}/pick", executionId)
+                .then().statusCode(200)
+                .body("execution.assignedUsername", equalTo("workflow.processor"));
+
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .queryParam("queueScope", "MY")
+                .when().get("/api/v1/work-items/my-work")
+                .then().statusCode(200)
+                .body("totalElements", equalTo(1));
+        given().cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .queryParam("queueScope", "OTHER")
+                .when().get("/api/v1/work-items/my-work")
+                .then().statusCode(200)
+                .body("totalElements", equalTo(1))
+                .body("items[0].assignedUsername", equalTo("workflow.processor"));
+        given().cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .when().get("/api/v1/work-items/executions/{executionId}", executionId)
+                .then().statusCode(200)
+                .body("readOnly", equalTo(true));
+        given().cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .when().post("/api/v1/work-items/executions/{executionId}/pick", executionId)
+                .then().statusCode(409)
+                .body("error", containsString("workflow.processor"));
+        given().cookie(AuthResource.SESSION_COOKIE, secondProcessorSession)
+                .queryParam("force", true)
+                .when().post("/api/v1/work-items/executions/{executionId}/pick", executionId)
+                .then().statusCode(200)
+                .body("reassigned", equalTo(true))
+                .body("execution.assignedUsername", equalTo("workflow.processor.two"));
+        given().cookie(AuthResource.SESSION_COOKIE, processorSession)
+                .queryParam("force", true)
+                .when().post("/api/v1/work-items/executions/{executionId}/pick", executionId)
+                .then().statusCode(200)
+                .body("execution.assignedUsername", equalTo("workflow.processor"));
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .when().get("/api/v1/work-items/my-work")
                 .then().statusCode(200)
-                .body("items[0].allowedTransitions[0].id", equalTo(completeTransitionId))
-                .body("items[0].activities[0].fromStatus", equalTo("NEW"))
+                .body("items[0].allowedTransitions[0].id", equalTo(Integer.valueOf(completeTransitionId)))
+                .body("items[0].activities[0].fromStatus", equalTo("AWAITING_FIRST_RESPONSE"))
                 .body("items[0].activities[0].performedByUsername", equalTo("workflow.processor"));
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
@@ -778,7 +1054,7 @@ class UserManagementResourceTest {
                 .then().statusCode(200)
                 .body("totalElements", equalTo(1))
                 .body("items.size()", equalTo(1))
-                .body("items[0].id", equalTo(executionId))
+                .body("items[0].id", equalTo(Integer.valueOf(executionId)))
                 .body("items[0].terminal", equalTo(true));
 
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
@@ -791,7 +1067,7 @@ class UserManagementResourceTest {
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
                 .when().get("/api/v1/work-items/executions/{executionId}", executionId)
                 .then().statusCode(200)
-                .body("execution.id", equalTo(executionId))
+                .body("execution.id", equalTo(Integer.valueOf(executionId)))
                 .body("execution.terminal", equalTo(true))
                 .body("conversation", nullValue());
 
@@ -822,7 +1098,7 @@ class UserManagementResourceTest {
                 .then().statusCode(200)
                 .body(containsString("Company code"))
                 .body(containsString("Change password"))
-                .body(containsString("My work"))
+                .body(containsString("Work items"))
                 .body(containsString("Filters and sorting"))
                 .body(containsString("my-work-status-summary"))
                 .body(containsString("navigate-administration"))
@@ -834,6 +1110,7 @@ class UserManagementResourceTest {
                 .body(containsString("Edit user"))
                 .body(containsString("Include completed work"))
                 .body(containsString("work-item-detail"))
+                .body(containsString("work-detail-type-form"))
                 .body(containsString("Documents"))
                 .body(containsString("Internal notes"))
                 .body(containsString("Reply to sender"))
@@ -856,23 +1133,23 @@ class UserManagementResourceTest {
                 .when().post("/api/v1/auth/login");
     }
 
-    private UUID tenantId(String session) {
-        return UUID.fromString(given().cookie(AuthResource.SESSION_COOKIE, session)
+    private Long tenantId(String session) {
+        return given().cookie(AuthResource.SESSION_COOKIE, session)
                 .when().get("/api/v1/auth/me")
                 .then().statusCode(200)
-                .extract().path("tenantId"));
+                .extract().<Number>path("tenantId").longValue();
     }
 
     private String incomeTaxDefinitionId(String session) {
         return given().cookie(AuthResource.SESSION_COOKIE, session)
                 .when().get("/api/v1/work-items/effective")
                 .then().statusCode(200)
-                .extract().path("find { it.type == 'INCOME_TAX' }.id");
+                .extract().jsonPath().getString("find { it.type == 'INCOME_TAX' }.id");
     }
 
-    private UUID createWorkAccount(
-            String session, UUID tenantId, String definitionId, String email) {
-        return UUID.fromString(given().contentType(ContentType.JSON)
+    private Long createWorkAccount(
+            String session, Long tenantId, String definitionId, String email) {
+        return given().contentType(ContentType.JSON)
                 .cookie(AuthResource.SESSION_COOKIE, session)
                 .body(Map.of(
                         "tenantId", tenantId.toString(),
@@ -881,7 +1158,7 @@ class UserManagementResourceTest {
                         "workItemId", definitionId))
                 .when().post("/api/v1/work-accounts")
                 .then().statusCode(200)
-                .extract().path("id"));
+                .extract().<Number>path("id").longValue();
     }
 
     private Map<String, String> loginBody(Seed seed, String password) {
@@ -895,13 +1172,13 @@ class UserManagementResourceTest {
         body.put("type", type);
         body.put("displayName", type.replace('_', ' '));
         body.put("active", true);
-        body.put("statuses", List.of(
-                Map.of("code", "NEW", "displayName", "New", "initialStatus", true, "terminalStatus", false, "sortOrder", 0),
-                Map.of("code", "REVIEW", "displayName", "Review", "initialStatus", false, "terminalStatus", false, "sortOrder", 1),
-                Map.of("code", "DONE", "displayName", "Done", "initialStatus", false, "terminalStatus", true, "sortOrder", 2)));
         body.put("transitions", List.of(
-                Map.of("fromStatus", "NEW", "toStatus", "REVIEW", "label", "Review"),
-                Map.of("fromStatus", "REVIEW", "toStatus", "DONE", "label", "Complete")));
+                Map.of("fromStatus", "AWAITING_FIRST_RESPONSE", "toStatus", "READY_TO_PICK", "label", "Ready to pick"),
+                Map.of("fromStatus", "READY_TO_PICK", "toStatus", "IN_PROGRESS", "label", "Start work"),
+                Map.of("fromStatus", "IN_PROGRESS", "toStatus", "AWAITING_CUSTOMER_RESPONSE", "label", "Request response"),
+                Map.of("fromStatus", "AWAITING_CUSTOMER_RESPONSE", "toStatus", "READY_TO_PICK", "label", "Customer responded"),
+                Map.of("fromStatus", "IN_PROGRESS", "toStatus", "CANCELLED", "label", "Cancel"),
+                Map.of("fromStatus", "IN_PROGRESS", "toStatus", "COMPLETED", "label", "Complete")));
         return body;
     }
 

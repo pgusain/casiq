@@ -12,10 +12,10 @@ import java.util.UUID;
         name = "uq_work_account_conversation_message",
         columnNames = {"work_account_id", "provider_message_id"}))
 public class WorkAccountConversationEntity extends PanacheEntityBase {
-    @Id @GeneratedValue public UUID id;
+    @Id @GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY) public Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "tenant_id") public TenantEntity tenant;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "work_account_id") public WorkAccountEntity workAccount;
-    @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "provider_code") public EmailProviderEntity provider;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "provider_id") public EmailProviderEntity provider;
     @Column(name = "provider_message_id", nullable = false, length = 255) public String providerMessageId;
     @Column(name = "provider_thread_id", length = 255) public String providerThreadId;
     @Column(name = "rfc_message_id", length = 998) public String rfcMessageId;

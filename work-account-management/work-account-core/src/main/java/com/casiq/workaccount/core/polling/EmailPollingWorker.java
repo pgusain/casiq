@@ -4,7 +4,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.util.UUID;
 
 @ApplicationScoped
 public class EmailPollingWorker {
@@ -12,7 +11,7 @@ public class EmailPollingWorker {
     @Inject EmailPollingProcessor processor;
     @Inject EmailPollingStateService state;
 
-    public void process(UUID configId, String owner) {
+    public void process(Long configId, String owner) {
         LOG.debugf("Email polling worker started configId=%s owner=%s", configId, owner);
         try {
             processor.poll(configId, owner);

@@ -18,7 +18,6 @@ import org.jboss.logging.Logger;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 
 @ApplicationScoped
 public class UserAdministrationService {
@@ -68,7 +67,7 @@ public class UserAdministrationService {
     }
 
     @Transactional
-    public UserView update(String rawToken, UUID targetId, String username,
+    public UserView update(String rawToken, Long targetId, String username,
                            String firstName, String lastName,
                            UserRole role, boolean active) {
         ApplicationUserEntity actor = administrator(rawToken);
@@ -124,7 +123,7 @@ public class UserAdministrationService {
     }
 
     @Transactional
-    public UserView resetPassword(String rawToken, UUID targetId, String temporaryPassword) {
+    public UserView resetPassword(String rawToken, Long targetId, String temporaryPassword) {
         ApplicationUserEntity actor = administrator(rawToken);
         if (actor.id.equals(targetId)) {
             throw new WebApplicationException("Use change password for your own account", 400);

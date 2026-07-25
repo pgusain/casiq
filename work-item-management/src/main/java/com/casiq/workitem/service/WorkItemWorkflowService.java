@@ -6,6 +6,8 @@ import com.casiq.usermanagement.persistence.ApplicationUserEntity;
 import com.casiq.usermanagement.persistence.TenantEntity;
 import com.casiq.usermanagement.service.AuthService;
 import com.casiq.workitem.api.WorkItemWorkflowView;
+import com.casiq.workitem.archive.WorkItemArchiveCodec;
+import com.casiq.workitem.archive.WorkItemArchivePayload;
 import com.casiq.workitem.persistence.*;
 import io.quarkus.hibernate.orm.panache.Panache;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -28,6 +30,7 @@ public class WorkItemWorkflowService {
     @Inject AuthService auth;
     @Inject WorkItemDefinitionService definitions;
     @Inject AttachmentStorage attachmentStorage;
+    @Inject WorkItemArchiveCodec archiveCodec;
     @Inject WorkItemNumberService workItemNumbers;
     @Inject Instance<WorkItemEmailContentResolver> emailContentResolvers;
     @ConfigProperty(name = "casiq.attachment-storage.max-bytes") long maxAttachmentBytes;
@@ -37,7 +40,7 @@ public class WorkItemWorkflowService {
     long emailCacheSeconds;
 
     @Transactional
-    public void initialize(UUID workAccountId, String workAccountEmail,
+    public void initialize(Long workAccountId, String workAccountEmail,
                            TenantEntity tenant, WorkItemDefinitionEntity definition) {
         WorkItemStatusEntity initial = WorkItemStatusEntity.find(
                 "definition.id = ?1 and initialStatus = true", definition.id).firstResult();
@@ -51,6 +54,7 @@ public class WorkItemWorkflowService {
         execution.definition = definition;
         execution.currentStatus = initial;
         execution.createdAt = Instant.now();
+        execution.archiveNextAttemptAt = execution.createdAt;
         execution.updatedAt = execution.createdAt;
         Panache.getEntityManager().persist(execution);
         LOG.infof("Initialized account-level work-item execution workAccountId=%s definitionId=%s status=%s",
@@ -58,7 +62,7 @@ public class WorkItemWorkflowService {
     }
 
     @Transactional
-    public void changeDefinition(UUID workAccountId, String workAccountEmail,
+    public void changeDefinition(Long workAccountId, String workAccountEmail,
                                  WorkItemDefinitionEntity definition) {
         WorkItemExecutionEntity execution = WorkItemExecutionEntity.find(
                 "workAccountId = ?1 and conversationId is null", workAccountId).firstResult();
@@ -80,7 +84,7 @@ public class WorkItemWorkflowService {
     }
 
     @Transactional
-    public List<WorkItemWorkflowView.Assignment> listAssignments(String token, UUID requestedTenantId) {
+    public List<WorkItemWorkflowView.Assignment> listAssignments(String token, Long requestedTenantId) {
         ApplicationUserEntity actor = administrator(token);
         TenantEntity tenant = targetTenant(actor, requestedTenantId);
         List<WorkItemWorkflowView.Assignment> result = new ArrayList<>();
@@ -139,7 +143,7 @@ public class WorkItemWorkflowService {
     }
 
     @Transactional
-    public void removeAssignment(String token, String type, UUID id) {
+    public void removeAssignment(String token, String type, Long id) {
         ApplicationUserEntity actor = administrator(token);
         if ("STATUS".equalsIgnoreCase(type)) {
             WorkItemStatusAssignmentEntity assignment = WorkItemStatusAssignmentEntity.findById(id);
@@ -159,6 +163,7 @@ public class WorkItemWorkflowService {
     @Transactional
     public WorkItemWorkflowView.WorkPage myWork(
             String token,
+            String queueScope,
             String workItemType,
             String status,
             String email,
@@ -175,6 +180,7 @@ public class WorkItemWorkflowService {
         StringBuilder query = new StringBuilder("tenant.id = :tenantId");
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("tenantId", actor.tenant.id);
+        appendQueueScope(query, parameters, queueScope, actor.id);
         if (!includeTerminal) query.append(" and currentStatus.terminalStatus = false");
         if (hasText(workItemType)) {
             query.append(" and definition.normalizedType = :workItemType");
@@ -197,7 +203,8 @@ public class WorkItemWorkflowService {
         List<WorkItemExecutionEntity> executions =
                 WorkItemExecutionEntity.list(query.toString(), parameters);
         List<WorkItemExecutionEntity> visible = executions.stream()
-                .filter(execution -> visibleTo(execution, actor, includeTerminal))
+                .filter(execution -> visibleInQueue(
+                        execution, actor, includeTerminal, queueScope))
                 .toList();
         long total = visible.size();
         int from = (int) Math.min((long) page * size, visible.size());
@@ -217,6 +224,7 @@ public class WorkItemWorkflowService {
     @Transactional
     public List<WorkItemWorkflowView.StatusCount> myWorkStatusSummary(
             String token,
+            String queueScope,
             String workItemType,
             String email,
             boolean includeTerminal) {
@@ -224,6 +232,7 @@ public class WorkItemWorkflowService {
         StringBuilder query = new StringBuilder("tenant.id = :tenantId");
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("tenantId", actor.tenant.id);
+        appendQueueScope(query, parameters, queueScope, actor.id);
         if (!includeTerminal) query.append(" and currentStatus.terminalStatus = false");
         if (hasText(workItemType)) {
             query.append(" and definition.normalizedType = :workItemType");
@@ -237,7 +246,8 @@ public class WorkItemWorkflowService {
                 WorkItemExecutionEntity.list(query.toString(), parameters);
         Map<String, WorkItemWorkflowView.StatusCount> counts = new TreeMap<>();
         executions.stream()
-                .filter(execution -> visibleTo(execution, actor, includeTerminal))
+                .filter(execution -> visibleInQueue(
+                        execution, actor, includeTerminal, queueScope))
                 .forEach(execution -> {
                     WorkItemStatusEntity status = execution.currentStatus;
                     counts.compute(status.code, (code, current) ->
@@ -254,9 +264,17 @@ public class WorkItemWorkflowService {
     }
 
     @Transactional
-    public WorkItemWorkflowView.Detail detail(String token, UUID executionId) {
+    public WorkItemWorkflowView.Detail detail(String token, Long executionId) {
         ApplicationUserEntity actor = authenticated(token);
         WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
+        if (execution.dataMigrated) {
+            WorkItemWorkflowView.Detail archived =
+                    archivedDetail(execution, actor);
+            LOG.infof(
+                    "Opened archived work-item detail executionId=%s archiveKey=%s actorId=%s",
+                    execution.id, execution.archiveStorageKey, actor.id);
+            return archived;
+        }
         LOG.infof("Opened work-item detail executionId=%s conversationId=%s actorId=%s",
                 execution.id, execution.initialCommunicationId, actor.id);
         List<WorkItemWorkflowView.Conversation> communications =
@@ -271,16 +289,202 @@ public class WorkItemWorkflowService {
                 initial,
                 communications,
                 documents(execution),
+                internalNotes(execution),
+                execution.currentStatus.terminalStatus
+                        || execution.assignedUser != null
+                        && !execution.assignedUser.id.equals(actor.id));
+    }
+
+    @Transactional
+    public WorkItemArchivePayload archivePayload(
+            Long executionId,
+            String owner) {
+        WorkItemExecutionEntity execution =
+                WorkItemExecutionEntity.findById(executionId);
+        if (execution == null) {
+            throw new NotFoundException("Work item execution not found");
+        }
+        Instant now = Instant.now();
+        if (execution.dataMigrated) {
+            throw new WebApplicationException(
+                    "Work item has already been archived", 409);
+        }
+        if (!Objects.equals(owner, execution.archiveLockOwner)
+                || execution.archiveLockedUntil == null
+                || !execution.archiveLockedUntil.isAfter(now)) {
+            throw new IllegalStateException(
+                    "Work-item archive lease is missing or expired");
+        }
+        if (!WorkItemDefinitionService.COMPLETED.equals(
+                execution.currentStatus.code)) {
+            throw new WebApplicationException(
+                    "Only completed work items can be archived", 409);
+        }
+        List<WorkItemWorkflowView.Conversation> communications =
+                communications(execution);
+        WorkItemWorkflowView.Conversation initial = communications.stream()
+                .filter(communication -> Objects.equals(
+                        communication.id(), execution.initialCommunicationId))
+                .findFirst()
+                .orElse(communications.isEmpty() ? null : communications.get(0));
+        List<WorkItemArchivePayload.ArchivedDocument> archivedDocuments =
+                WorkItemDocumentEntity.<WorkItemDocumentEntity>list(
+                                "execution.id = ?1 order by createdAt, id",
+                                execution.id)
+                        .stream()
+                        .map(document -> new WorkItemArchivePayload.ArchivedDocument(
+                                documentView(document),
+                                document.contentData != null
+                                        ? document.contentData
+                                        : attachmentStorage.get(
+                                                execution.tenant.id,
+                                                document.storageKey)))
+                        .toList();
+        WorkItemArchivePayload.ArchivedExecution archivedExecution =
+                new WorkItemArchivePayload.ArchivedExecution(
+                        execution.id,
+                        execution.workItemNumber,
+                        execution.tenant.id,
+                        execution.workAccountId,
+                        execution.initialCommunicationId,
+                        execution.workAccountEmail,
+                        execution.emailSubject,
+                        execution.emailSender,
+                        execution.emailRecipients,
+                        execution.emailSentAt,
+                        execution.definition.id,
+                        execution.definition.type,
+                        execution.definition.displayName,
+                        execution.currentStatus.id,
+                        execution.currentStatus.code,
+                        execution.currentStatus.displayName,
+                        execution.currentStatus.terminalStatus,
+                        execution.assignedUser == null
+                                ? null
+                                : execution.assignedUser.id,
+                        execution.assignedUser == null
+                                ? null
+                                : execution.assignedUser.username,
+                        activities(execution),
+                        execution.createdAt,
+                        execution.updatedAt);
+        WorkItemArchivePayload payload = new WorkItemArchivePayload(
+                1,
+                now,
+                archivedExecution,
+                initial,
+                communications,
+                archivedDocuments,
                 internalNotes(execution));
+        LOG.infof(
+                "Built consolidated work-item archive executionId=%s communications=%d documents=%d notes=%d",
+                execution.id,
+                communications.size(),
+                archivedDocuments.size(),
+                payload.internalNotes().size());
+        return payload;
+    }
+
+    @Transactional
+    public WorkItemWorkflowView.PickResult pick(
+            String token,
+            Long executionId,
+            boolean force) {
+        ApplicationUserEntity actor = authenticated(token);
+        WorkItemExecutionEntity execution =
+                WorkItemExecutionEntity.findById(executionId);
+        if (execution == null) throw new NotFoundException("Work item execution not found");
+        if (!execution.tenant.id.equals(actor.tenant.id)) {
+            throw new ForbiddenException("Work item is outside your tenant");
+        }
+        if (execution.currentStatus.terminalStatus) {
+            throw new WebApplicationException("Terminal work items cannot be picked", 409);
+        }
+        if (execution.assignedUser != null && execution.assignedUser.id.equals(actor.id)) {
+            return new WorkItemWorkflowView.PickResult(
+                    executionView(execution, actor), false, false);
+        }
+        boolean reassigned = execution.assignedUser != null;
+        if (reassigned && !force) {
+            throw new WebApplicationException(
+                    "This work item is already being worked by "
+                            + execution.assignedUser.username,
+                    409);
+        }
+        if (!force && !visibleTo(execution, actor, false)) {
+            throw new ForbiddenException(
+                    "No assigned workflow activity is available to you");
+        }
+        String previousUsername =
+                execution.assignedUser == null ? null : execution.assignedUser.username;
+        execution.assignedUser = actor;
+        execution.assignedAt = Instant.now();
+        execution.updatedAt = execution.assignedAt;
+        LOG.infof(
+                "Picked work item executionId=%s actorId=%s reassigned=%s previousAssignee=%s",
+                execution.id, actor.id, reassigned, previousUsername);
+        return new WorkItemWorkflowView.PickResult(
+                executionView(execution, actor), !reassigned, reassigned);
+    }
+
+    @Transactional
+    public WorkItemWorkflowView.Execution changeExecutionDefinition(
+            String token,
+            Long executionId,
+            Long definitionId) {
+        ApplicationUserEntity actor = authenticated(token);
+        WorkItemExecutionEntity execution =
+                versionedAccessibleExecution(actor, executionId);
+        if (execution.currentStatus.terminalStatus) {
+            throw new WebApplicationException(
+                    "Terminal work items cannot change type", 409);
+        }
+        if (allowedTransitions(execution, actor).isEmpty()) {
+            throw new ForbiddenException(
+                    "No assigned workflow activity is available to you");
+        }
+        ensureOwned(execution, actor);
+        WorkItemDefinitionEntity target =
+                definitions.requireEffective(definitionId, actor.tenant.id);
+        if (execution.definition.id.equals(target.id)) {
+            return executionView(execution, actor);
+        }
+        WorkItemStatusEntity targetStatus = WorkItemStatusEntity.find(
+                "definition.id = ?1 and normalizedCode = ?2",
+                target.id,
+                execution.currentStatus.normalizedCode).firstResult();
+        if (targetStatus == null) {
+            throw new WebApplicationException(
+                    "The selected work-item type does not support the current status",
+                    409);
+        }
+        Long previousDefinitionId = execution.definition.id;
+        String previousType = execution.definition.type;
+        execution.definition = target;
+        execution.currentStatus = targetStatus;
+        execution.updatedAt = Instant.now();
+        LOG.infof(
+                "Changed work-item execution type executionId=%s actorId=%s previousDefinitionId=%s previousType=%s definitionId=%s type=%s status=%s",
+                execution.id,
+                actor.id,
+                previousDefinitionId,
+                previousType,
+                target.id,
+                target.type,
+                targetStatus.code);
+        return executionView(execution, actor);
     }
 
     @Transactional
     public WorkItemWorkflowView.InternalNote addInternalNote(
             String token,
-            UUID executionId,
+            Long executionId,
             String rawContent) {
         ApplicationUserEntity actor = authenticated(token);
-        WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
+        WorkItemExecutionEntity execution =
+                versionedAccessibleExecution(actor, executionId);
+        requireMutableDetails(execution);
+        ensureOwned(execution, actor);
         String content = rawContent == null ? "" : rawContent.trim();
         if (content.isBlank()) throw new BadRequestException("Internal note is required");
         if (content.length() > 10_000) {
@@ -302,10 +506,31 @@ public class WorkItemWorkflowService {
     @Transactional
     public DocumentDownload document(
             String token,
-            UUID executionId,
-            UUID documentId) {
+            Long executionId,
+            Long documentId) {
         ApplicationUserEntity actor = authenticated(token);
-        WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
+        WorkItemExecutionEntity execution =
+                accessibleExecution(actor, executionId);
+        if (execution.dataMigrated) {
+            WorkItemArchivePayload.ArchivedDocument document =
+                    archiveCodec.read(
+                                    execution.tenant.id,
+                                    execution.archiveStorageKey)
+                            .documents()
+                            .stream()
+                            .filter(candidate ->
+                                    candidate.metadata().id().equals(documentId))
+                            .findFirst()
+                            .orElseThrow(() -> new NotFoundException(
+                                    "Work item document not found"));
+            LOG.infof(
+                    "Downloaded archived work-item document executionId=%s documentId=%s actorId=%s",
+                    executionId, documentId, actor.id);
+            return new DocumentDownload(
+                    document.metadata().filename(),
+                    document.metadata().contentType(),
+                    document.content());
+        }
         WorkItemDocumentEntity document = WorkItemDocumentEntity.find(
                 "id = ?1 and execution.id = ?2 and tenant.id = ?3",
                 documentId, execution.id, actor.tenant.id).firstResult();
@@ -324,12 +549,15 @@ public class WorkItemWorkflowService {
     @Transactional
     public WorkItemWorkflowView.Document uploadInternalDocument(
             String token,
-            UUID executionId,
+            Long executionId,
             String rawFilename,
             String rawContentType,
             byte[] content) {
         ApplicationUserEntity actor = authenticated(token);
-        WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
+        WorkItemExecutionEntity execution =
+                versionedAccessibleExecution(actor, executionId);
+        requireMutableDetails(execution);
+        ensureOwned(execution, actor);
         String filename = safeFilename(rawFilename);
         if (content == null || content.length == 0) {
             throw new BadRequestException("Document content is required");
@@ -365,12 +593,17 @@ public class WorkItemWorkflowService {
     }
 
     @Transactional
-    public ReplyTarget replyTarget(String token, UUID executionId) {
+    public ReplyTarget replyTarget(String token, Long executionId) {
         ApplicationUserEntity actor = authenticated(token);
-        WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
+        WorkItemExecutionEntity execution =
+                versionedAccessibleExecution(actor, executionId);
+        requireMutableDetails(execution);
+        ensureOwned(execution, actor);
         if (execution.initialCommunicationId == null) {
             throw new BadRequestException("This work item is not linked to an email conversation");
         }
+        Panache.getEntityManager().lock(
+                execution, LockModeType.OPTIMISTIC);
         return new ReplyTarget(
                 execution.id,
                 execution.tenant.id,
@@ -379,12 +612,11 @@ public class WorkItemWorkflowService {
     }
 
     @Transactional
-    public WorkItemWorkflowView.Execution perform(String token, UUID executionId, UUID transitionId) {
+    public WorkItemWorkflowView.Execution perform(String token, Long executionId, Long transitionId) {
         ApplicationUserEntity actor = authenticated(token);
-        WorkItemExecutionEntity execution = WorkItemExecutionEntity.find("id", executionId)
-                .withLock(LockModeType.PESSIMISTIC_WRITE).firstResult();
-        if (execution == null) throw new NotFoundException("Work item execution not found");
-        if (!execution.tenant.id.equals(actor.tenant.id)) throw new ForbiddenException("Work item is outside your tenant");
+        WorkItemExecutionEntity execution =
+                versionedAccessibleExecution(actor, executionId);
+        ensureOwned(execution, actor);
         WorkItemTransitionEntity transition = WorkItemTransitionEntity.findById(transitionId);
         if (transition == null || !transition.definition.id.equals(execution.definition.id)
                 || !transition.fromStatus.id.equals(execution.currentStatus.id)) {
@@ -420,7 +652,7 @@ public class WorkItemWorkflowService {
                 "tenant.id = ?1 and status.id = ?2 and user.id = ?3",
                 execution.tenant.id, execution.currentStatus.id, actor.id) > 0;
         if (ownsStatus) return outgoing;
-        Set<UUID> assigned = new HashSet<>(WorkItemTransitionAssignmentEntity.<WorkItemTransitionAssignmentEntity>list(
+        Set<Long> assigned = new HashSet<>(WorkItemTransitionAssignmentEntity.<WorkItemTransitionAssignmentEntity>list(
                 "tenant.id = ?1 and user.id = ?2 and transition.fromStatus.id = ?3",
                 execution.tenant.id, actor.id, execution.currentStatus.id).stream().map(a -> a.transition.id).toList());
         return outgoing.stream().filter(t -> assigned.contains(t.id)).toList();
@@ -434,20 +666,45 @@ public class WorkItemWorkflowService {
             return !allowedTransitions(execution, actor).isEmpty();
         }
         if (!includeTerminal) return false;
-        return WorkItemActivityEntity.count(
+        return execution.assignedUser != null
+                && execution.assignedUser.id.equals(actor.id)
+                || WorkItemActivityEntity.count(
                 "execution.id = ?1 and performedBy.id = ?2", execution.id, actor.id) > 0
                 || WorkItemStatusAssignmentEntity.count(
                 "tenant.id = ?1 and status.id = ?2 and user.id = ?3",
                 execution.tenant.id, execution.currentStatus.id, actor.id) > 0;
     }
 
+    private boolean visibleInQueue(
+            WorkItemExecutionEntity execution,
+            ApplicationUserEntity actor,
+            boolean includeTerminal,
+            String rawScope) {
+        if (!visibleTo(execution, actor, includeTerminal)) {
+            return false;
+        }
+        String scope = rawScope == null
+                ? "ALL"
+                : rawScope.trim().toUpperCase(Locale.ROOT);
+        boolean assignedToActor = execution.assignedUser != null
+                && execution.assignedUser.id.equals(actor.id);
+        return switch (scope) {
+            case "MY" -> assignedToActor;
+            case "OTHER" -> !assignedToActor;
+            case "ALL", "" -> true;
+            default -> throw new BadRequestException(
+                    "queueScope must be MY, OTHER, or ALL");
+        };
+    }
+
     private WorkItemWorkflowView.Execution executionView(WorkItemExecutionEntity execution, ApplicationUserEntity actor) {
-        List<WorkItemWorkflowView.Transition> transitions = allowedTransitions(execution, actor).stream()
+        boolean assignedToActor = execution.assignedUser != null
+                && execution.assignedUser.id.equals(actor.id);
+        List<WorkItemWorkflowView.Transition> transitions =
+                (execution.assignedUser == null || assignedToActor
+                        ? allowedTransitions(execution, actor)
+                        : List.<WorkItemTransitionEntity>of()).stream()
                 .map(t -> new WorkItemWorkflowView.Transition(t.id, t.label, t.fromStatus.code, t.toStatus.code)).toList();
-        List<WorkItemWorkflowView.Activity> activities = WorkItemActivityEntity.<WorkItemActivityEntity>list(
-                "execution.id = ?1 order by performedAt desc", execution.id).stream()
-                .map(a -> new WorkItemWorkflowView.Activity(a.transitionLabel, a.fromStatusCode, a.toStatusCode,
-                        a.performedBy.id, a.performedBy.username, a.performedAt)).toList();
         return new WorkItemWorkflowView.Execution(
                 execution.id,
                 execution.workItemNumber,
@@ -459,7 +716,127 @@ public class WorkItemWorkflowService {
                 execution.definition.id, execution.definition.type, execution.definition.displayName,
                 execution.currentStatus.id, execution.currentStatus.code, execution.currentStatus.displayName,
                 execution.currentStatus.terminalStatus,
-                transitions, activities, execution.updatedAt);
+                execution.dataMigrated,
+                execution.assignedUser == null ? null : execution.assignedUser.id,
+                execution.assignedUser == null ? null : execution.assignedUser.username,
+                assignedToActor,
+                transitions, activities(execution), execution.updatedAt);
+    }
+
+    private List<WorkItemWorkflowView.Activity> activities(
+            WorkItemExecutionEntity execution) {
+        if (execution.dataMigrated) return List.of();
+        return WorkItemActivityEntity.<WorkItemActivityEntity>list(
+                        "execution.id = ?1 order by performedAt desc",
+                        execution.id)
+                .stream()
+                .map(activity -> new WorkItemWorkflowView.Activity(
+                        activity.transitionLabel,
+                        activity.fromStatusCode,
+                        activity.toStatusCode,
+                        activity.performedBy.id,
+                        activity.performedBy.username,
+                        activity.performedAt))
+                .toList();
+    }
+
+    private WorkItemWorkflowView.Detail archivedDetail(
+            WorkItemExecutionEntity execution,
+            ApplicationUserEntity actor) {
+        WorkItemArchivePayload payload = archiveCodec.read(
+                execution.tenant.id,
+                execution.archiveStorageKey);
+        WorkItemArchivePayload.ArchivedExecution archived =
+                payload.execution();
+        boolean assignedToActor = archived.assignedUserId() != null
+                && archived.assignedUserId().equals(actor.id);
+        WorkItemWorkflowView.Execution archivedView =
+                new WorkItemWorkflowView.Execution(
+                        archived.id(),
+                        archived.workItemNumber(),
+                        archived.workAccountId(),
+                        archived.conversationId(),
+                        archived.emailId(),
+                        archived.emailSubject(),
+                        archived.emailSender(),
+                        archived.definitionId(),
+                        archived.workItemType(),
+                        archived.workItemDisplayName(),
+                        archived.currentStatusId(),
+                        archived.currentStatus(),
+                        archived.currentStatusDisplayName(),
+                        archived.terminal(),
+                        true,
+                        archived.assignedUserId(),
+                        archived.assignedUsername(),
+                        assignedToActor,
+                        List.of(),
+                        archived.activities(),
+                        archived.updatedAt());
+        return new WorkItemWorkflowView.Detail(
+                archivedView,
+                payload.conversation(),
+                payload.communications(),
+                payload.documents().stream()
+                        .map(WorkItemArchivePayload.ArchivedDocument::metadata)
+                        .toList(),
+                payload.internalNotes(),
+                true);
+    }
+
+    private static void requireMutableDetails(
+            WorkItemExecutionEntity execution) {
+        if (execution.dataMigrated) {
+            throw new WebApplicationException(
+                    "Archived work-item details are read-only", 409);
+        }
+        if (execution.currentStatus.terminalStatus) {
+            throw new WebApplicationException(
+                    "Terminal work-item details are read-only", 409);
+        }
+    }
+
+    private void ensureOwned(
+            WorkItemExecutionEntity execution,
+            ApplicationUserEntity actor) {
+        if (execution.assignedUser == null) {
+            execution.assignedUser = actor;
+            execution.assignedAt = Instant.now();
+            execution.updatedAt = execution.assignedAt;
+            LOG.infof("Auto-assigned work item executionId=%s actorId=%s",
+                    execution.id, actor.id);
+            return;
+        }
+        if (!execution.assignedUser.id.equals(actor.id)) {
+            throw new ForbiddenException(
+                    "This work item is being worked by "
+                            + execution.assignedUser.username
+                            + "; open it in read-only mode or reassign it first");
+        }
+    }
+
+    private static void appendQueueScope(
+            StringBuilder query,
+            Map<String, Object> parameters,
+            String rawScope,
+            Long actorId) {
+        String scope = rawScope == null
+                ? "ALL"
+                : rawScope.trim().toUpperCase(Locale.ROOT);
+        switch (scope) {
+            case "MY" -> {
+                query.append(" and assignedUser.id = :actorId");
+                parameters.put("actorId", actorId);
+            }
+            case "OTHER" -> {
+                query.append(" and (assignedUser is null or assignedUser.id <> :actorId)");
+                parameters.put("actorId", actorId);
+            }
+            case "ALL", "" -> {
+            }
+            default -> throw new BadRequestException(
+                    "queueScope must be MY, OTHER, or ALL");
+        }
     }
 
     private List<WorkItemWorkflowView.Document> documents(
@@ -586,13 +963,32 @@ public class WorkItemWorkflowService {
 
     private WorkItemExecutionEntity accessibleExecution(
             ApplicationUserEntity actor,
-            UUID executionId) {
+            Long executionId) {
         WorkItemExecutionEntity execution = WorkItemExecutionEntity.findById(executionId);
         if (execution == null) throw new NotFoundException("Work item execution not found");
         if (!execution.tenant.id.equals(actor.tenant.id)) {
             throw new ForbiddenException("Work item is outside your tenant");
         }
-        if (!visibleTo(execution, actor, true)) {
+        if (execution.assignedUser == null
+                && !visibleTo(execution, actor, true)) {
+            throw new ForbiddenException("Work item is not assigned to you");
+        }
+        return execution;
+    }
+
+    private WorkItemExecutionEntity versionedAccessibleExecution(
+            ApplicationUserEntity actor,
+            Long executionId) {
+        WorkItemExecutionEntity execution =
+                WorkItemExecutionEntity.findById(executionId);
+        if (execution == null) {
+            throw new NotFoundException("Work item execution not found");
+        }
+        if (!execution.tenant.id.equals(actor.tenant.id)) {
+            throw new ForbiddenException("Work item is outside your tenant");
+        }
+        if (execution.assignedUser == null
+                && !visibleTo(execution, actor, true)) {
             throw new ForbiddenException("Work item is not assigned to you");
         }
         return execution;
@@ -640,10 +1036,6 @@ public class WorkItemWorkflowService {
         return Instant.parse(String.valueOf(value));
     }
 
-    private static UUID uuid(Object value) {
-        return value instanceof UUID id ? id : UUID.fromString(String.valueOf(value));
-    }
-
     private static String safeFilename(String value) {
         String filename = value == null ? "" : value.replace("\\", "/");
         filename = filename.substring(filename.lastIndexOf('/') + 1)
@@ -673,8 +1065,8 @@ public class WorkItemWorkflowService {
         if (actor.role != UserRole.GLOBAL_ADMIN && actor.role != UserRole.ADMIN) throw new ForbiddenException("Administrator role required");
         return actor;
     }
-    private TenantEntity targetTenant(ApplicationUserEntity actor, UUID requestedTenantId) {
-        UUID tenantId = actor.role == UserRole.GLOBAL_ADMIN ? requestedTenantId : actor.tenant.id;
+    private TenantEntity targetTenant(ApplicationUserEntity actor, Long requestedTenantId) {
+        Long tenantId = actor.role == UserRole.GLOBAL_ADMIN ? requestedTenantId : actor.tenant.id;
         if (actor.role != UserRole.GLOBAL_ADMIN && requestedTenantId != null && !requestedTenantId.equals(actor.tenant.id)) {
             throw new ForbiddenException("Tenant is outside your scope");
         }
@@ -683,23 +1075,23 @@ public class WorkItemWorkflowService {
         if (tenant == null || !tenant.active) throw new NotFoundException("Active tenant not found");
         return tenant;
     }
-    private void assertTenant(ApplicationUserEntity actor, UUID tenantId) {
+    private void assertTenant(ApplicationUserEntity actor, Long tenantId) {
         if (actor.role != UserRole.GLOBAL_ADMIN && !actor.tenant.id.equals(tenantId)) {
             throw new ForbiddenException("Assignment is outside your tenant");
         }
     }
-    private static void requireStatusDefinition(WorkItemStatusEntity status, UUID definitionId) {
+    private static void requireStatusDefinition(WorkItemStatusEntity status, Long definitionId) {
         if (status == null || !status.definition.id.equals(definitionId)) throw new BadRequestException("Status does not belong to the work item");
     }
-    private static void requireTransitionDefinition(WorkItemTransitionEntity transition, UUID definitionId) {
+    private static void requireTransitionDefinition(WorkItemTransitionEntity transition, Long definitionId) {
         if (transition == null || !transition.definition.id.equals(definitionId)) throw new BadRequestException("Transition does not belong to the work item");
     }
 
-    public record AssignmentInput(UUID tenantId, UUID definitionId, UUID statusId, UUID transitionId, UUID userId) {}
+    public record AssignmentInput(Long tenantId, Long definitionId, Long statusId, Long transitionId, Long userId) {}
     public record DocumentDownload(String filename, String contentType, byte[] content) {}
     public record ReplyTarget(
-            UUID executionId,
-            UUID tenantId,
-            UUID workAccountId,
-            UUID conversationId) {}
+            Long executionId,
+            Long tenantId,
+            Long workAccountId,
+            Long conversationId) {}
 }

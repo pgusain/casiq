@@ -4,7 +4,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.util.UUID;
 
 @ApplicationScoped
 public class ConversationWorkItemWorker {
@@ -12,7 +11,7 @@ public class ConversationWorkItemWorker {
     @Inject ConversationWorkItemProcessor processor;
     @Inject ConversationWorkItemStateService state;
 
-    public void process(UUID conversationId, String owner) {
+    public void process(Long conversationId, String owner) {
         LOG.debugf("Conversation work-item worker started conversationId=%s owner=%s",
                 conversationId, owner);
         try {

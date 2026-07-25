@@ -55,20 +55,24 @@
 
     <section id="dashboard" class="dashboard hidden">
       <header class="page-header">
-        <div><p id="page-eyebrow" class="eyebrow">WORK ITEM MANAGEMENT</p><h1 id="page-title">My work items</h1><p id="workspace-label"></p></div>
+        <div><p id="page-eyebrow" class="eyebrow">WORK ITEM MANAGEMENT</p><h1 id="page-title">Work items</h1><p id="workspace-label"></p></div>
         <span id="role-badge" class="role-badge"></span>
       </header>
       <div id="notice" class="notice hidden"></div>
 
       <section id="work-items-screen">
         <section id="my-work-panel" class="my-work-panel">
-          <div class="section-heading"><div><h2>Assigned work</h2><p>Work items waiting for an activity assigned to you.</p></div><button id="refresh-my-work" class="quiet">Refresh</button></div>
+          <div class="section-heading"><div><h2>Work items</h2><p>Pick available tasks or continue work already assigned to you.</p></div><button id="refresh-my-work" class="quiet">Refresh</button></div>
+          <div class="work-queue-tabs" role="tablist" aria-label="Work item queues">
+            <button id="my-tasks-tab" class="work-queue-tab active" type="button" role="tab" aria-selected="true">My tasks</button>
+            <button id="other-tasks-tab" class="work-queue-tab" type="button" role="tab" aria-selected="false">Other tasks</button>
+          </div>
           <div id="my-work-status-summary" class="work-status-summary" aria-label="Work item counts by status"></div>
           <details id="my-work-filter-panel" class="filter-panel">
             <summary>Filters and sorting</summary>
             <form id="my-work-filters" class="card work-filter-form">
               <label>Work-item type<select id="my-work-type"><option value="">All work-item types</option></select></label>
-              <label>Status<input id="my-work-status" maxlength="64" placeholder="e.g. NEW"></label>
+              <label>Status<select id="my-work-status"><option value="">All statuses</option><option value="AWAITING_FIRST_RESPONSE">Awaiting first response</option><option value="READY_TO_PICK">Ready to pick</option><option value="IN_PROGRESS">In progress</option><option value="AWAITING_CUSTOMER_RESPONSE">Awaiting customer response</option><option value="CANCELLED">Cancelled</option><option value="COMPLETED">Completed</option></select></label>
               <label>Work-account email<input id="my-work-email" type="search" maxlength="320" placeholder="Email starts with"></label>
               <label>Sort by<select id="my-work-sort"><option value="updatedAt">Last updated</option><option value="createdAt">Created</option><option value="email">Email</option><option value="workItemType">Work-item type</option><option value="status">Status</option></select></label>
               <label>Direction<select id="my-work-direction"><option value="desc">Descending</option><option value="asc">Ascending</option></select></label>
@@ -122,8 +126,8 @@
               </div>
               <label class="check-field"><input id="work-item-active" type="checkbox" checked><span>Available for work accounts</span></label>
               <div class="graph-fields">
-                <label>Status nodes <span class="field-help">One per line: CODE | Display name | INITIAL | TERMINAL</span><textarea id="work-item-statuses" required rows="5" placeholder="NEW | New | INITIAL |&#10;IN_PROGRESS | In progress | |&#10;COMPLETED | Completed | | TERMINAL"></textarea></label>
-                <label>Directed transitions <span class="field-help">One per line: FROM | TO | Label</span><textarea id="work-item-transitions" rows="5" placeholder="NEW | IN_PROGRESS | Start&#10;IN_PROGRESS | COMPLETED | Complete"></textarea></label>
+                <div class="fixed-statuses"><strong>Required statuses</strong><p>AWAITING_FIRST_RESPONSE · READY_TO_PICK · IN_PROGRESS · AWAITING_CUSTOMER_RESPONSE · CANCELLED · COMPLETED</p><span class="field-help">These statuses are added automatically to every work item.</span></div>
+                <label>Directed transitions <span class="field-help">One per line: FROM | TO | Label</span><textarea id="work-item-transitions" rows="9" placeholder="AWAITING_FIRST_RESPONSE | READY_TO_PICK | Ready to pick&#10;READY_TO_PICK | IN_PROGRESS | Start work&#10;IN_PROGRESS | AWAITING_CUSTOMER_RESPONSE | Request customer response&#10;AWAITING_CUSTOMER_RESPONSE | READY_TO_PICK | Customer responded&#10;IN_PROGRESS | CANCELLED | Cancel&#10;IN_PROGRESS | COMPLETED | Complete"></textarea></label>
               </div>
               <p id="work-item-error" class="error hidden"></p>
               <button id="save-work-item" class="primary compact" type="submit">Create work item</button>
@@ -218,6 +222,7 @@
       <form method="dialog" class="dialog-close"><button class="quiet" aria-label="Close work item">Close</button></form>
       <p class="eyebrow">WORK ITEM</p>
       <h2 id="work-detail-title"></h2>
+      <p id="work-detail-readonly" class="readonly-banner hidden"></p>
       <div id="work-detail-meta" class="email-meta"></div>
       <div class="work-detail-layout">
         <section class="work-detail-main">
@@ -247,6 +252,16 @@
         </section>
 
         <aside class="work-detail-side">
+          <section id="work-detail-type-section" class="hidden">
+            <h3>Work item type</h3>
+            <form id="work-detail-type-form">
+              <label for="work-detail-type">Type</label>
+              <select id="work-detail-type" required></select>
+              <p class="field-help">The current status is preserved. Available actions and access will follow the selected type.</p>
+              <p id="work-detail-type-error" class="error hidden"></p>
+              <button class="secondary compact" type="submit">Save type</button>
+            </form>
+          </section>
           <section>
             <h3>Documents</h3>
             <div id="work-detail-documents" class="document-list"></div>

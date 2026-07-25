@@ -18,7 +18,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.UUID;
 
 @ApplicationScoped
 public class GmailOAuthService {
@@ -45,7 +44,7 @@ public class GmailOAuthService {
         return beginAuthorization(null, null);
     }
 
-    public AuthorizationResponse beginAuthorization(UUID workAccountId, String loginHint) {
+    public AuthorizationResponse beginAuthorization(Long workAccountId, String loginHint) {
         var pkce = Pkce.create();
         Instant expiresAt = attempts.put(pkce.state(), pkce.codeVerifier(), workAccountId);
 

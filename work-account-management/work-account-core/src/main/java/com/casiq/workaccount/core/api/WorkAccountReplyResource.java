@@ -23,7 +23,7 @@ public class WorkAccountReplyResource {
     @Path("/{executionId}")
     public WorkAccountReplyService.ReplyView reply(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
-            @PathParam("executionId") UUID executionId,
+            @PathParam("executionId") Long executionId,
             @Valid @NotNull ReplyInput input) {
         return replies.reply(
                 token,
@@ -36,5 +36,5 @@ public class WorkAccountReplyResource {
     public record ReplyInput(
             @NotNull UUID requestId,
             @NotBlank @Size(max = 60_000) String htmlBody,
-            List<UUID> documentIds) {}
+            List<Long> documentIds) {}
 }

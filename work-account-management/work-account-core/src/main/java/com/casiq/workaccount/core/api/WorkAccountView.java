@@ -4,14 +4,12 @@ import com.casiq.workaccount.core.persistence.WorkAccountEntity;
 import com.casiq.workaccount.core.persistence.EmailPollingConfigEntity;
 
 import java.time.Instant;
-import java.util.UUID;
-
 public record WorkAccountView(
-        UUID id,
-        UUID tenantId,
+        Long id,
+        Long tenantId,
         String companyCode,
         String emailId,
-        UUID workItemId,
+        Long workItemId,
         String workItemType,
         String workItemDisplayName,
         String provider,

@@ -1,7 +1,6 @@
 package com.casiq.workitem.service;
 
 import java.time.Instant;
-import java.util.UUID;
 
 /**
  * Email-content boundary implemented by work-account management. Resolution
@@ -11,8 +10,8 @@ public interface WorkItemEmailContentResolver {
     ResolvedContent resolve(EmailReference reference);
 
     record EmailReference(
-            UUID tenantId,
-            UUID workAccountId,
+            Long tenantId,
+            Long workAccountId,
             String providerCode,
             String providerMessageId) {}
 

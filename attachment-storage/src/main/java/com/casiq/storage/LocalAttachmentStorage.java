@@ -22,7 +22,7 @@ public class LocalAttachmentStorage implements AttachmentStorage {
 
     @Override
     public StoredObject put(
-            UUID tenantId,
+            Long tenantId,
             String category,
             String filename,
             String contentType,
@@ -31,8 +31,23 @@ public class LocalAttachmentStorage implements AttachmentStorage {
         String safeCategory = category == null
                 ? "other"
                 : category.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_-]", "-");
-        String key = tenantId + "/" + safeCategory + "/" + UUID.randomUUID();
-        Path target = resolve(tenantId, key);
+        String key = safeCategory + "/" + UUID.randomUUID();
+        return putAtKey(tenantId, key, contentType, content);
+    }
+
+    @Override
+    public StoredObject putAtKey(
+            Long tenantId,
+            String key,
+            String contentType,
+            byte[] content) {
+        if (key == null || key.isBlank() || key.startsWith("/")
+                || key.contains("..") || key.contains("\\")) {
+            throw new IllegalArgumentException("Invalid local attachment key");
+        }
+        if (content == null) throw new IllegalArgumentException("Attachment content is required");
+        String storedKey = tenantId + "/" + key;
+        Path target = resolve(tenantId, storedKey);
         try {
             Files.createDirectories(target.getParent());
             Path temporary = Files.createTempFile(target.getParent(), ".upload-", ".tmp");
@@ -48,12 +63,12 @@ public class LocalAttachmentStorage implements AttachmentStorage {
             throw new IllegalStateException("Unable to store attachment on local disk", failure);
         }
         LOG.debugf("Stored local attachment tenantId=%s key=%s size=%d",
-                tenantId, key, content.length);
-        return new StoredObject("LOCAL", key, content.length);
+                (Object) tenantId, storedKey, content.length);
+        return new StoredObject("LOCAL", storedKey, content.length);
     }
 
     @Override
-    public byte[] get(UUID tenantId, String key) {
+    public byte[] get(Long tenantId, String key) {
         Path target = resolve(tenantId, key);
         try {
             return Files.readAllBytes(target);
@@ -62,7 +77,7 @@ public class LocalAttachmentStorage implements AttachmentStorage {
         }
     }
 
-    private Path resolve(UUID tenantId, String key) {
+    private Path resolve(Long tenantId, String key) {
         String requiredPrefix = tenantId + "/";
         if (key == null || !key.startsWith(requiredPrefix)) {
             throw new IllegalArgumentException("Attachment key is outside the tenant");

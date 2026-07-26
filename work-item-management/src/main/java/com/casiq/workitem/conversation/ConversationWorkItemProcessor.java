@@ -158,23 +158,37 @@ public class ConversationWorkItemProcessor {
                     executionId, conversationId, providerThreadId);
         }
 
-        Panache.getEntityManager().createNativeQuery("""
-                        UPDATE work_account_conversation
-                        SET work_item_processed_at = ?1,
-                            work_item_execution_id = ?4,
-                            work_item_lock_owner = NULL,
-                            work_item_locked_until = NULL,
-                            work_item_last_error = NULL,
-                            work_item_failures = 0
-                        WHERE id = ?2
-                          AND work_item_lock_owner = ?3
+        var entityManager = Panache.getEntityManager();
+        entityManager.flush();
+        entityManager.createNativeQuery("""
+                        UPDATE work_item_execution
+                        SET conversation_id = NULL
+                        WHERE conversation_id = ?1
                         """)
-                .setParameter(1, now)
-                .setParameter(2, conversationId)
-                .setParameter(3, owner)
-                .setParameter(4, executionId)
+                .setParameter(1, conversationId)
                 .executeUpdate();
-        LOG.infof("Conversation marked processed conversationId=%s executionId=%s owner=%s",
+        entityManager.createNativeQuery("""
+                        UPDATE work_item_document
+                        SET source_conversation_id = NULL,
+                            source_attachment_id = NULL
+                        WHERE source_conversation_id = ?1
+                        """)
+                .setParameter(1, conversationId)
+                .executeUpdate();
+        entityManager.clear();
+        int deleted = entityManager.createNativeQuery("""
+                        DELETE FROM work_account_conversation
+                        WHERE id = ?1
+                          AND work_item_lock_owner = ?2
+                        """)
+                .setParameter(1, conversationId)
+                .setParameter(2, owner)
+                .executeUpdate();
+        if (deleted != 1) {
+            throw new IllegalStateException(
+                    "Conversation work-item lease was lost before source cleanup");
+        }
+        LOG.infof("Consumed conversation removed conversationId=%s executionId=%s owner=%s",
                 conversationId, executionId, owner);
     }
 

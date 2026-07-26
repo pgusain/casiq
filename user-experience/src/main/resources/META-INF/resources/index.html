@@ -127,7 +127,7 @@
               <label class="check-field"><input id="work-item-active" type="checkbox" checked><span>Available for work accounts</span></label>
               <div class="graph-fields">
                 <div class="fixed-statuses"><strong>Required statuses</strong><p>AWAITING_FIRST_RESPONSE · READY_TO_PICK · IN_PROGRESS · AWAITING_CUSTOMER_RESPONSE · CANCELLED · COMPLETED</p><span class="field-help">These statuses are added automatically to every work item.</span></div>
-                <label>Directed transitions <span class="field-help">One per line: FROM | TO | Label</span><textarea id="work-item-transitions" rows="9" placeholder="AWAITING_FIRST_RESPONSE | READY_TO_PICK | Ready to pick&#10;READY_TO_PICK | IN_PROGRESS | Start work&#10;IN_PROGRESS | AWAITING_CUSTOMER_RESPONSE | Request customer response&#10;AWAITING_CUSTOMER_RESPONSE | READY_TO_PICK | Customer responded&#10;IN_PROGRESS | CANCELLED | Cancel&#10;IN_PROGRESS | COMPLETED | Complete"></textarea></label>
+                <label>Directed transitions <span class="field-help">One per line: FROM | TO | Label</span><textarea id="work-item-transitions" rows="9" placeholder="AWAITING_FIRST_RESPONSE | IN_PROGRESS | Start work&#10;IN_PROGRESS | AWAITING_CUSTOMER_RESPONSE | Request customer response&#10;IN_PROGRESS | COMPLETED | Complete&#10;IN_PROGRESS | CANCELLED | Cancel&#10;AWAITING_CUSTOMER_RESPONSE | READY_TO_PICK | Customer responded&#10;READY_TO_PICK | IN_PROGRESS | Start work"></textarea></label>
               </div>
               <p id="work-item-error" class="error hidden"></p>
               <button id="save-work-item" class="primary compact" type="submit">Create work item</button>
@@ -136,7 +136,7 @@
           </section>
 
           <section id="assignment-panel" class="assignment-panel">
-            <div class="section-heading"><div><h2>Workflow assignments</h2><p>Assign a status or a linked transition to an active user in the tenant.</p></div><button id="show-assignment-form" class="primary compact">Add assignment</button></div>
+            <div class="section-heading"><div><h2>Workflow assignments</h2><p>Assignments are grouped by work item and then by status or transition.</p></div><button id="show-assignment-form" class="primary compact">Add assignment</button></div>
             <form id="assignment-form" class="card inline-form hidden">
               <div class="form-title"><strong>Assign workflow activity</strong><button type="button" id="cancel-assignment" class="quiet">Cancel</button></div>
               <div class="form-grid">
@@ -154,7 +154,7 @@
           </section>
 
           <section id="work-account-panel" class="work-account-panel">
-            <div class="section-heading"><div><h2>Work accounts</h2><p>Map email inboxes to work items and connect Gmail.</p></div><button id="show-work-account-form" class="primary compact">Add work account</button></div>
+            <div class="section-heading"><div><h2>Work accounts</h2><p>Map this tenant's email inboxes to work items and connect Gmail.</p></div><button id="show-work-account-form" class="primary compact">Add work account</button></div>
             <form id="work-account-form" class="card inline-form hidden">
               <input id="work-account-id" type="hidden">
               <div class="form-title"><strong id="work-account-form-title">Create work account</strong><button type="button" id="cancel-work-account" class="quiet">Cancel</button></div>

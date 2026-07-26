@@ -48,12 +48,18 @@ function route(user) {
       loadMyWork();
     });
   if (isAdmin()) {
-    $('#admin-panel').classList.remove('hidden'); configureCreateForm(); loadUsers(); loadWorkAccounts(); loadEmailProviders();
+    $('#admin-panel').classList.remove('hidden'); configureCreateForm(); loadUsers();
     const globalAdmin = currentUser.role === 'GLOBAL_ADMIN';
+    const tenantAdmin = currentUser.role === 'ADMIN';
     $('#tenant-panel').classList.toggle('hidden', !globalAdmin);
     $('#work-item-panel').classList.toggle('hidden', !globalAdmin);
-    $('#work-account-tenant-field').classList.toggle('hidden', !globalAdmin);
+    $('#work-account-panel').classList.toggle('hidden', !tenantAdmin);
+    $('#work-account-tenant-field').classList.add('hidden');
     $('#assignment-tenant-field').classList.toggle('hidden', !globalAdmin);
+    if (tenantAdmin) {
+      loadWorkAccounts();
+      loadEmailProviders();
+    }
     if (globalAdmin) {
       loadTenants().then(loadAssignmentContext);
       loadWorkItemDefinitions();
@@ -166,12 +172,12 @@ function openWorkItemForm(definition = null) {
   $('#work-item-active').checked = definition?.active ?? true;
   $('#work-item-transitions').value = definition?.transitions.map(edge =>
     `${edge.fromStatus} | ${edge.toStatus} | ${edge.label}`).join('\n') ||
-    'AWAITING_FIRST_RESPONSE | READY_TO_PICK | Ready to pick\n' +
-    'READY_TO_PICK | IN_PROGRESS | Start work\n' +
+    'AWAITING_FIRST_RESPONSE | IN_PROGRESS | Start work\n' +
     'IN_PROGRESS | AWAITING_CUSTOMER_RESPONSE | Request customer response\n' +
-    'AWAITING_CUSTOMER_RESPONSE | READY_TO_PICK | Customer responded\n' +
+    'IN_PROGRESS | COMPLETED | Complete\n' +
     'IN_PROGRESS | CANCELLED | Cancel\n' +
-    'IN_PROGRESS | COMPLETED | Complete';
+    'AWAITING_CUSTOMER_RESPONSE | READY_TO_PICK | Customer responded\n' +
+    'READY_TO_PICK | IN_PROGRESS | Start work';
   $('#work-item-scope').disabled = Boolean(definition);
   $('#work-item-tenant').disabled = Boolean(definition);
   $('#work-item-type').readOnly = Boolean(definition);
@@ -237,7 +243,8 @@ async function loadAssignmentContext() {
 }
 
 function updateAssignmentTargets() {
-  const definition = assignmentWorkItems.find(item => item.id === $('#assignment-definition').value);
+  const selectedDefinitionId = $('#assignment-definition').value;
+  const definition = assignmentWorkItems.find(item => String(item.id) === selectedDefinitionId);
   const targets = $('#assignment-type').value === 'STATUS'
     ? (definition?.statuses || []).map(status => ({value:status.id, label:`${status.displayName} (${status.code})`}))
     : (definition?.transitions || []).map(edge => ({
@@ -262,22 +269,73 @@ function renderCheckboxOptions(container, options) {
 function renderAssignments(assignments) {
   const root = $('#assignments');
   if (!assignments.length) { root.innerHTML = '<div class="empty">No workflow assignments for this tenant.</div>'; return; }
-  root.replaceChildren(...assignments.map(assignment => {
-    const row = document.createElement('article'); row.className = 'user-row';
-    const identity = document.createElement('div'); identity.className = 'user-identity';
-    const avatar = document.createElement('span'); avatar.className = 'mini-avatar'; avatar.textContent = initials(assignment.username);
-    const copy = document.createElement('div');
-    const name = document.createElement('h4'); name.textContent = assignment.username;
-    const target = document.createElement('p');
-    target.textContent = `${assignment.workItemType} · ${assignment.assignmentType === 'STATUS'
-      ? `Status ${assignment.statusCode}` : `Activity ${assignment.transitionLabel}`}`;
-    copy.append(name, target); identity.append(avatar, copy);
-    const actions = document.createElement('div'); actions.className = 'user-actions';
-    const kind = document.createElement('span'); kind.className = 'assignment-kind'; kind.textContent = assignment.assignmentType;
-    const remove = document.createElement('button'); remove.className = 'reset'; remove.textContent = 'Remove';
-    remove.onclick = () => removeAssignment(assignment);
-    actions.append(kind, remove); row.append(identity, actions); return row;
+  const workflowGroups = new Map();
+  assignments.forEach(assignment => {
+    const workflowKey = String(assignment.definitionId);
+    if (!workflowGroups.has(workflowKey)) workflowGroups.set(workflowKey, []);
+    workflowGroups.get(workflowKey).push(assignment);
+  });
+  root.replaceChildren(...[...workflowGroups.values()].map(renderAssignmentWorkflowGroup));
+}
+
+function renderAssignmentWorkflowGroup(assignments) {
+  const definition = assignmentWorkItems.find(item => String(item.id) === String(assignments[0].definitionId));
+  const group = document.createElement('section'); group.className = 'assignment-workflow-group';
+  const heading = document.createElement('div'); heading.className = 'assignment-workflow-heading';
+  const title = document.createElement('h3');
+  title.textContent = definition
+    ? `${definition.displayName} (${definition.type})`
+    : assignments[0].workItemType;
+  const count = document.createElement('span');
+  count.textContent = `${assignments.length} assignment${assignments.length === 1 ? '' : 's'}`;
+  heading.append(title, count);
+
+  const targetGroups = new Map();
+  assignments.forEach(assignment => {
+    const targetId = assignment.assignmentType === 'STATUS'
+      ? assignment.statusId : assignment.transitionId;
+    const key = `${assignment.assignmentType}:${targetId}`;
+    if (!targetGroups.has(key)) targetGroups.set(key, []);
+    targetGroups.get(key).push(assignment);
+  });
+  const targets = document.createElement('div'); targets.className = 'assignment-target-list';
+  targets.append(...[...targetGroups.values()].map(grouped => renderAssignmentTarget(grouped, definition)));
+  group.append(heading, targets);
+  return group;
+}
+
+function renderAssignmentTarget(assignments, definition) {
+  const assignment = assignments[0];
+  const statusAssignment = assignment.assignmentType === 'STATUS';
+  const status = definition?.statuses?.find(item => String(item.id) === String(assignment.statusId));
+  const transition = definition?.transitions?.find(item => String(item.id) === String(assignment.transitionId));
+  const row = document.createElement('article'); row.className = 'assignment-target-row';
+  const target = document.createElement('div'); target.className = 'assignment-target-name';
+  const kind = document.createElement('span'); kind.className = 'assignment-kind';
+  kind.textContent = statusAssignment ? 'STATUS' : 'TRANSITION';
+  const label = document.createElement('strong');
+  label.textContent = statusAssignment
+    ? (status ? `${status.displayName} (${status.code})` : assignment.statusCode)
+    : (transition
+      ? `${transition.label}: ${transition.fromStatus} → ${transition.toStatus}`
+      : assignment.transitionLabel);
+  target.append(kind, label);
+
+  const users = document.createElement('div'); users.className = 'assignment-users';
+  users.append(...assignments.map(item => {
+    const user = document.createElement('span'); user.className = 'assignment-user';
+    const avatar = document.createElement('span'); avatar.className = 'assignment-user-avatar';
+    avatar.textContent = initials(item.username);
+    const username = document.createElement('span'); username.textContent = item.username;
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove ${item.username} from this ${item.assignmentType.toLowerCase()}`);
+    remove.onclick = () => removeAssignment(item);
+    user.append(avatar, username, remove);
+    return user;
   }));
+  row.append(target, users);
+  return row;
 }
 
 async function removeAssignment(assignment) {
@@ -959,14 +1017,9 @@ async function openWorkAccountForm(account = null) {
   $('#work-account-id').value = account?.id || '';
   $('#work-account-email').value = account?.emailId || '';
   $('#work-account-provider').value = account?.provider || emailProviders[0]?.code || '';
-  const tenantId = currentUser.role === 'GLOBAL_ADMIN'
-    ? (account?.tenantId || availableTenants.find(tenant => tenant.active)?.id || '') : currentUser.tenantId;
+  const tenantId = currentUser.tenantId;
   await loadEffectiveWorkItems(tenantId);
   $('#work-account-item').value = account?.workItemId || availableWorkItems[0]?.id || '';
-  if (currentUser.role === 'GLOBAL_ADMIN') {
-    $('#work-account-tenant').value = tenantId;
-    $('#work-account-tenant').disabled = Boolean(account);
-  }
   $('#work-account-form-title').textContent = account ? 'Update work account' : 'Create work account';
   $('#save-work-account').textContent = account ? 'Save changes' : 'Create work account';
   $('#work-account-error').classList.add('hidden');
@@ -1243,7 +1296,7 @@ $('#work-account-form').onsubmit = async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true; $('#work-account-error').classList.add('hidden');
   const accountId = $('#work-account-id').value;
   const payload = {
-    tenantId: currentUser.role === 'GLOBAL_ADMIN' ? $('#work-account-tenant').value : currentUser.tenantId,
+    tenantId: currentUser.tenantId,
     emailId: $('#work-account-email').value,
     provider: $('#work-account-provider').value,
     workItemId: $('#work-account-item').value

@@ -40,6 +40,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -235,9 +236,13 @@ class UserManagementResourceTest {
         AtomicReference<String> conversationExecutionId = new AtomicReference<>();
         QuarkusTransaction.requiringNew().run(() -> {
             WorkItemExecutionEntity execution =
-                    WorkItemExecutionEntity.find("conversationId", conversationId).firstResult();
+                    WorkItemExecutionEntity.find(
+                            "workAccountId = ?1 and initialCommunicationId is not null",
+                            Long.valueOf(workAccountId)).firstResult();
             assertNotNull(execution);
             conversationExecutionId.set(execution.id.toString());
+            assertNull(execution.conversationId);
+            assertNull(WorkAccountConversationEntity.findById(conversationId));
             assertEquals(Long.valueOf(workAccountId), execution.workAccountId);
             assertEquals("tax@example.com", execution.workAccountEmail);
             assertEquals("GST", execution.definition.type);
@@ -245,15 +250,6 @@ class UserManagementResourceTest {
             assertEquals("GST filing", execution.emailSubject);
             assertEquals("sender@example.com", execution.emailSender);
             assertEquals(null, execution.emailContentHtml);
-            Object processedAt = Panache.getEntityManager().createNativeQuery("""
-                            SELECT work_item_processed_at
-                            FROM work_account_conversation
-                            WHERE id = ?1
-                            """)
-                    .setParameter(1, conversationId)
-                    .getSingleResult();
-            assertNotNull(processedAt);
-
             WorkItemStatusEntity awaitingCustomer = WorkItemStatusEntity.find(
                     "definition.id = ?1 and code = ?2",
                     execution.definition.id,
@@ -311,19 +307,19 @@ class UserManagementResourceTest {
         conversationWorkItemProcessor.createExecution(
                 followUpConversationId, "work-item-instance-four");
         QuarkusTransaction.requiringNew().run(() -> {
-            WorkAccountConversationEntity followUp =
-                    WorkAccountConversationEntity.findById(followUpConversationId);
-            assertNotNull(followUp.workItemExecution);
+            assertNull(WorkAccountConversationEntity.findById(followUpConversationId));
+            WorkItemExecutionEntity execution = WorkItemExecutionEntity.findById(
+                    Long.valueOf(conversationExecutionId.get()));
             assertEquals(conversationExecutionId.get(),
-                    followUp.workItemExecution.id.toString());
+                    execution.id.toString());
             assertEquals(
                     "READY_TO_PICK",
-                    followUp.workItemExecution.currentStatus.code);
+                    execution.currentStatus.code);
             assertEquals(
                     Long.valueOf(adminUserId),
-                    followUp.workItemExecution.assignedUser.id);
+                    execution.assignedUser.id);
             assertEquals(1L, WorkItemExecutionEntity.count(
-                    "workAccountId = ?1 and definition.type = ?2 and conversationId is not null",
+                    "workAccountId = ?1 and definition.type = ?2 and initialCommunicationId is not null",
                     Long.valueOf(workAccountId), "GST"));
         });
 
@@ -360,15 +356,6 @@ class UserManagementResourceTest {
                 .then().statusCode(200)
                 .header("Content-Disposition", containsString("gst-filing.pdf"))
                 .body(equalTo("test-pdf-content"));
-
-        QuarkusTransaction.requiringNew().run(() -> {
-            WorkItemExecutionEntity execution = WorkItemExecutionEntity.findById(
-                    Long.valueOf(conversationExecutionId.get()));
-            execution.conversationId = null;
-            Panache.getEntityManager().flush();
-            WorkAccountConversationEntity.delete(
-                    "id in ?1", List.of(conversationId, followUpConversationId));
-        });
 
         given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/work-items/executions/{executionId}",
@@ -414,10 +401,10 @@ class UserManagementResourceTest {
         conversationWorkItemProcessor.createExecution(
                 postPurgeConversationId, "work-item-instance-five");
         QuarkusTransaction.requiringNew().run(() -> {
-            WorkAccountConversationEntity postPurge =
-                    WorkAccountConversationEntity.findById(postPurgeConversationId);
-            assertNotNull(postPurge.workItemExecution);
-            assertEquals(conversationExecutionId.get(), postPurge.workItemExecution.id.toString());
+            assertNull(WorkAccountConversationEntity.findById(postPurgeConversationId));
+            WorkItemExecutionEntity execution = WorkItemExecutionEntity.findById(
+                    Long.valueOf(conversationExecutionId.get()));
+            assertEquals(conversationExecutionId.get(), execution.id.toString());
         });
         given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().get("/api/v1/work-items/executions/{executionId}",
@@ -798,8 +785,8 @@ class UserManagementResourceTest {
         String definitionId = definition.jsonPath().getString("find { it.type == 'INCOME_TAX' }.id");
         String gstDefinitionId = definition.jsonPath().getString(
                 "find { it.type == 'GST' }.id");
-        String gstReadyStatusId = definition.jsonPath().getString(
-                "find { it.type == 'GST' }.statuses.find { it.code == 'READY_TO_PICK' }.id");
+        String gstInProgressStatusId = definition.jsonPath().getString(
+                "find { it.type == 'GST' }.statuses.find { it.code == 'IN_PROGRESS' }.id");
         String initialStatusId = definition.jsonPath().getString(
                 "find { it.type == 'INCOME_TAX' }.statuses.find { it.initialStatus }.id");
         String startTransitionId = definition.jsonPath().getString(
@@ -858,7 +845,7 @@ class UserManagementResourceTest {
         given().contentType(ContentType.JSON)
                 .cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .body(assignmentBody(
-                        tenantId, gstDefinitionId, gstReadyStatusId,
+                        tenantId, gstDefinitionId, gstInProgressStatusId,
                         null, secondProcessorId))
                 .when().post("/api/v1/work-items/assignments")
                 .then().statusCode(200);
@@ -905,7 +892,7 @@ class UserManagementResourceTest {
                 .when().post("/api/v1/work-items/executions/{executionId}/transitions/{transitionId}",
                         executionId, startTransitionId)
                 .then().statusCode(200)
-                .body("currentStatus", equalTo("READY_TO_PICK"))
+                .body("currentStatus", equalTo("IN_PROGRESS"))
                 .body("assignedUsername", equalTo("workflow.processor"))
                 .body("assignedToCurrentUser", equalTo(true));
         long versionAfterAssignment = QuarkusTransaction.requiringNew().call(() ->
@@ -925,7 +912,7 @@ class UserManagementResourceTest {
                         executionId)
                 .then().statusCode(200)
                 .body("workItemType", equalTo("GST"))
-                .body("currentStatus", equalTo("READY_TO_PICK"))
+                .body("currentStatus", equalTo("IN_PROGRESS"))
                 .body("assignedUsername", equalTo("workflow.processor"))
                 .body("allowedTransitions.size()", equalTo(0));
         long versionAfterTypeChange = QuarkusTransaction.requiringNew().call(() ->
@@ -957,7 +944,7 @@ class UserManagementResourceTest {
                         executionId)
                 .then().statusCode(200)
                 .body("workItemType", equalTo("INCOME_TAX"))
-                .body("currentStatus", equalTo("READY_TO_PICK"))
+                .body("currentStatus", equalTo("IN_PROGRESS"))
                 .body("allowedTransitions.id",
                         hasItem(Integer.valueOf(completeTransitionId)));
         given().cookie(AuthResource.SESSION_COOKIE, processorSession)
@@ -1118,6 +1105,14 @@ class UserManagementResourceTest {
                 .body(containsString("work-reply-editor"))
                 .body(containsString("/assets/casiq-logo.png"));
 
+        given().when().get("/app.js")
+                .then().statusCode(200)
+                .body(containsString(
+                        "assignmentWorkItems.find(item => String(item.id) === selectedDefinitionId)"))
+                .body(containsString("renderAssignmentWorkflowGroup"))
+                .body(containsString(
+                        "work-account-panel').classList.toggle('hidden', !tenantAdmin)"));
+
         given().when().get("/gmail/")
                 .then().statusCode(200)
                 .body(containsString("GOOGLE OAUTH CONNECTOR"));
@@ -1173,12 +1168,12 @@ class UserManagementResourceTest {
         body.put("displayName", type.replace('_', ' '));
         body.put("active", true);
         body.put("transitions", List.of(
-                Map.of("fromStatus", "AWAITING_FIRST_RESPONSE", "toStatus", "READY_TO_PICK", "label", "Ready to pick"),
-                Map.of("fromStatus", "READY_TO_PICK", "toStatus", "IN_PROGRESS", "label", "Start work"),
+                Map.of("fromStatus", "AWAITING_FIRST_RESPONSE", "toStatus", "IN_PROGRESS", "label", "Start work"),
                 Map.of("fromStatus", "IN_PROGRESS", "toStatus", "AWAITING_CUSTOMER_RESPONSE", "label", "Request response"),
-                Map.of("fromStatus", "AWAITING_CUSTOMER_RESPONSE", "toStatus", "READY_TO_PICK", "label", "Customer responded"),
+                Map.of("fromStatus", "IN_PROGRESS", "toStatus", "COMPLETED", "label", "Complete"),
                 Map.of("fromStatus", "IN_PROGRESS", "toStatus", "CANCELLED", "label", "Cancel"),
-                Map.of("fromStatus", "IN_PROGRESS", "toStatus", "COMPLETED", "label", "Complete")));
+                Map.of("fromStatus", "AWAITING_CUSTOMER_RESPONSE", "toStatus", "READY_TO_PICK", "label", "Customer responded"),
+                Map.of("fromStatus", "READY_TO_PICK", "toStatus", "IN_PROGRESS", "label", "Start work")));
         return body;
     }
 

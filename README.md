@@ -72,6 +72,37 @@ Open <http://localhost:8080/> for login and user administration, or
 `SESSION_COOKIE_SECURE=false`; use the default secure cookie setting in an HTTPS
 deployment.
 
+## EC2 promotion workflow
+
+`.github/workflows/promote.yml` tests every push to `main`, publishes an immutable
+`${GITHUB_SHA}` image to GitHub Container Registry, deploys it to the
+`development` GitHub Environment, and then promotes that exact image to the
+`production` Environment. Configure a required reviewer on `production` to make
+promotion an explicit approval gate.
+
+Create both GitHub Environments with these environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `EC2_HOST` | EC2 hostname or IP |
+| `EC2_USER` | SSH user with permission to run Docker |
+| `EC2_SSH_PORT` | SSH port; defaults to `22` |
+| `EC2_HOST_FINGERPRINT` | SHA-256 SSH host fingerprint |
+| `APP_ENV_FILE` | Absolute path to the pre-provisioned application env file |
+| `APP_URL` | Public URL recorded on the GitHub deployment |
+| `APP_PORT` | Host port mapped to container port `8080` |
+| `APP_BIND_ADDRESS` | Host bind address; defaults to `127.0.0.1` for a local reverse proxy |
+| `ATTACHMENT_DATA_DIR` | Persistent host attachment directory |
+| `CONTAINER_NAME` | Environment-specific Docker container name |
+
+Add `EC2_SSH_KEY` as an environment secret in both environments. Each EC2 host
+must have Docker and `curl`, be able to pull this repository's GHCR package, and
+already contain the `APP_ENV_FILE`. At minimum that file should configure
+`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, the initial-admin placeholders, Google
+OAuth values, and `SESSION_COOKIE_SECURE`. The deploy script keeps attachment
+storage on the host and rolls back to the previous image if the new container
+does not answer its HTTP health check.
+
 ### Identity and authorization
 
 Login is uniquely resolved by normalized `company code + username`; usernames can

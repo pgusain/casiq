@@ -12,12 +12,14 @@ RUN groupadd --system --gid 1001 casiq \
     && chown -R casiq:casiq /work
 
 WORKDIR /work
+
 COPY --from=build --chown=casiq:casiq /workspace/casiq-application/target/quarkus-app/lib/ /work/lib/
 COPY --from=build --chown=casiq:casiq /workspace/casiq-application/target/quarkus-app/*.jar /work/
 COPY --from=build --chown=casiq:casiq /workspace/casiq-application/target/quarkus-app/app/ /work/app/
 COPY --from=build --chown=casiq:casiq /workspace/casiq-application/target/quarkus-app/quarkus/ /work/quarkus/
 
 USER 1001
+
 EXPOSE 8080
 
 ENTRYPOINT ["java", "-jar", "/work/quarkus-run.jar"]

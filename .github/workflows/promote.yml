@@ -96,7 +96,7 @@ jobs:
             | ssh-keygen -lf - || true
             
       - name: Deploy image to development EC2
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.EC2_HOST }}
           port: ${{ vars.EC2_SSH_PORT || '22' }}

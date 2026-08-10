@@ -1,45 +1,57 @@
 name: Promote development to production
+
 on:
   push:
     branches:
       - main
-  workflow_dispatch: null
+  workflow_dispatch:
+
 env:
   REGISTRY: ghcr.io
+
 jobs:
   test-build-publish:
     name: Test, build, and publish image
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: write
+
     outputs:
       image-ref: ${{ steps.image.outputs.ref }}
+
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
           cache: maven
+
       - name: Run tests
         run: mvn --batch-mode --no-transfer-progress test
+
       - name: Set image reference
         id: image
         shell: bash
         run: |
           image_name="${GITHUB_REPOSITORY,,}"
           echo "ref=${REGISTRY}/${image_name}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and publish immutable image
         uses: docker/build-push-action@v7
         with:
@@ -48,104 +60,302 @@ jobs:
           tags: ${{ steps.image.outputs.ref }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
   deploy-development:
     name: Deploy development
     needs:
       - test-build-publish
+
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: read
+
     environment:
       name: development
       url: ${{ vars.APP_URL }}
+
     concurrency:
       group: casiq-development
       cancel-in-progress: false
+
     env:
       IMAGE_REF: ${{ needs.test-build-publish.outputs.image-ref }}
+
       GHCR_USER: ${{ github.actor }}
       GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       ENVIRONMENT: development
+
       AWS_REGION: ${{ vars.AWS_REGION }}
       SSM_DB_PASSWORD_PARAMETER: ${{ vars.SSM_DB_PASSWORD_PARAMETER }}
+
       APP_ENV_FILE: ${{ vars.APP_ENV_FILE }}
       COMPOSE_FILE: ${{ vars.COMPOSE_FILE || '/opt/casiq/compose.yaml' }}
+
       APP_PORT: ${{ vars.APP_PORT || '8080' }}
       APP_BIND_ADDRESS: ${{ vars.APP_BIND_ADDRESS || '127.0.0.1' }}
+
       ATTACHMENT_DATA_DIR: ${{ vars.ATTACHMENT_DATA_DIR || '/opt/casiq/data/attachments' }}
       CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'casiq-app' }}
+
     steps:
-      - name: Check out deployment script
+      - name: Check out source
         uses: actions/checkout@v7
-      - name: Inspect EC2 SSH host keys
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_HOST: ${{ vars.EC2_HOST }}
+          SSH_PORT: ${{ vars.EC2_SSH_PORT || '22' }}
+          EXPECTED_FINGERPRINT: ${{ vars.EC2_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/casiq_deploy_key"
+          chmod 600 "$HOME/.ssh/casiq_deploy_key"
+
+          echo "Verifying SSH host fingerprint for ${SSH_HOST}:${SSH_PORT}..."
+
+          actual_fingerprint="$(
+            ssh-keyscan \
+              -p "$SSH_PORT" \
+              -t ed25519 \
+              "$SSH_HOST" \
+              2>/dev/null \
+            | ssh-keygen -lf - \
+            | awk '{print $2}' \
+            | head -1
+          )"
+
+          if [ -z "$actual_fingerprint" ]; then
+            echo "ERROR: Unable to retrieve ED25519 host key from $SSH_HOST." >&2
+            exit 1
+          fi
+
+          if [ "$actual_fingerprint" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "ERROR: SSH host fingerprint mismatch." >&2
+            exit 1
+          fi
+
+          echo "SSH host fingerprint verified."
+
+          ssh-keyscan \
+            -p "$SSH_PORT" \
+            -t ed25519 \
+            "$SSH_HOST" \
+            >> "$HOME/.ssh/known_hosts"
+
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Test SSH connectivity
         shell: bash
         run: |
-          echo "Host: ${{ vars.EC2_HOST }}"
-      
-          echo "ED25519:"
-          ssh-keyscan -t ed25519 "${{ vars.EC2_HOST }}" 2>/dev/null \
-            | ssh-keygen -lf - || true
-      
-          echo "ECDSA:"
-          ssh-keyscan -t ecdsa "${{ vars.EC2_HOST }}" 2>/dev/null \
-            | ssh-keygen -lf - || true
-      
-          echo "RSA:"
-          ssh-keyscan -t rsa "${{ vars.EC2_HOST }}" 2>/dev/null \
-            | ssh-keygen -lf - || true
-            
+          ssh \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -p "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}" \
+            'echo "Connected to $(hostname) as $(whoami)"'
+
+      - name: Prepare deployment directory
+        shell: bash
+        run: |
+          ssh \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -p "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}" \
+            'mkdir -p /opt/casiq'
+
+      - name: Copy deployment files
+        shell: bash
+        run: |
+          scp \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -P "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            compose.yaml \
+            .github/scripts/deploy-ec2.sh \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}:/opt/casiq/"
+
       - name: Deploy image to development EC2
-        uses: appleboy/ssh-action@v1.2.4
-        with:
-          host: ${{ vars.EC2_HOST }}
-          port: ${{ vars.EC2_SSH_PORT || '22' }}
-          username: ${{ vars.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          fingerprint: ${{ vars.EC2_HOST_FINGERPRINT }}
-          command_timeout: 10m
-          envs: IMAGE_REF,GHCR_USER,GHCR_TOKEN,ENVIRONMENT,AWS_REGION,SSM_DB_PASSWORD_PARAMETER,APP_ENV_FILE,COMPOSE_FILE,APP_PORT,APP_BIND_ADDRESS,ATTACHMENT_DATA_DIR,CONTAINER_NAME
-          script_path: .github/scripts/deploy-ec2.sh
-          debug: true
+        shell: bash
+        run: |
+          ssh \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -p "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}" \
+            "IMAGE_REF='$IMAGE_REF' \
+             GHCR_USER='$GHCR_USER' \
+             GHCR_TOKEN='$GHCR_TOKEN' \
+             ENVIRONMENT='$ENVIRONMENT' \
+             AWS_REGION='$AWS_REGION' \
+             SSM_DB_PASSWORD_PARAMETER='$SSM_DB_PASSWORD_PARAMETER' \
+             APP_ENV_FILE='$APP_ENV_FILE' \
+             COMPOSE_FILE='$COMPOSE_FILE' \
+             APP_PORT='$APP_PORT' \
+             APP_BIND_ADDRESS='$APP_BIND_ADDRESS' \
+             ATTACHMENT_DATA_DIR='$ATTACHMENT_DATA_DIR' \
+             CONTAINER_NAME='$CONTAINER_NAME' \
+             sh /opt/casiq/deploy-ec2.sh"
+
   deploy-production:
     name: Promote to production
     needs:
       - test-build-publish
       - deploy-development
+
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: read
+
     environment:
       name: production
       url: ${{ vars.APP_URL }}
+
     concurrency:
       group: casiq-production
       cancel-in-progress: false
+
     env:
       IMAGE_REF: ${{ needs.test-build-publish.outputs.image-ref }}
+
       GHCR_USER: ${{ github.actor }}
       GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       ENVIRONMENT: production
+
       AWS_REGION: ${{ vars.AWS_REGION }}
       SSM_DB_PASSWORD_PARAMETER: ${{ vars.SSM_DB_PASSWORD_PARAMETER }}
+
       APP_ENV_FILE: ${{ vars.APP_ENV_FILE }}
       COMPOSE_FILE: ${{ vars.COMPOSE_FILE || '/opt/casiq/compose.yaml' }}
+
       APP_PORT: ${{ vars.APP_PORT || '8080' }}
       APP_BIND_ADDRESS: ${{ vars.APP_BIND_ADDRESS || '127.0.0.1' }}
+
       ATTACHMENT_DATA_DIR: ${{ vars.ATTACHMENT_DATA_DIR || '/opt/casiq/data/attachments' }}
       CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'casiq-app' }}
+
     steps:
-      - name: Check out deployment script
+      - name: Check out source
         uses: actions/checkout@v7
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_HOST: ${{ vars.EC2_HOST }}
+          SSH_PORT: ${{ vars.EC2_SSH_PORT || '22' }}
+          EXPECTED_FINGERPRINT: ${{ vars.EC2_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/casiq_deploy_key"
+          chmod 600 "$HOME/.ssh/casiq_deploy_key"
+
+          echo "Verifying SSH host fingerprint for ${SSH_HOST}:${SSH_PORT}..."
+
+          actual_fingerprint="$(
+            ssh-keyscan \
+              -p "$SSH_PORT" \
+              -t ed25519 \
+              "$SSH_HOST" \
+              2>/dev/null \
+            | ssh-keygen -lf - \
+            | awk '{print $2}' \
+            | head -1
+          )"
+
+          if [ -z "$actual_fingerprint" ]; then
+            echo "ERROR: Unable to retrieve ED25519 host key from $SSH_HOST." >&2
+            exit 1
+          fi
+
+          if [ "$actual_fingerprint" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "ERROR: SSH host fingerprint mismatch." >&2
+            exit 1
+          fi
+
+          echo "SSH host fingerprint verified."
+
+          ssh-keyscan \
+            -p "$SSH_PORT" \
+            -t ed25519 \
+            "$SSH_HOST" \
+            >> "$HOME/.ssh/known_hosts"
+
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Test SSH connectivity
+        shell: bash
+        run: |
+          ssh \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -p "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}" \
+            'echo "Connected to $(hostname) as $(whoami)"'
+
+      - name: Prepare deployment directory
+        shell: bash
+        run: |
+          ssh \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -p "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}" \
+            'mkdir -p /opt/casiq'
+
+      - name: Copy deployment files
+        shell: bash
+        run: |
+          scp \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -P "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            compose.yaml \
+            .github/scripts/deploy-ec2.sh \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}:/opt/casiq/"
+
       - name: Deploy approved image to production EC2
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ vars.EC2_HOST }}
-          port: ${{ vars.EC2_SSH_PORT || '22' }}
-          username: ${{ vars.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          fingerprint: ${{ vars.EC2_HOST_FINGERPRINT }}
-          command_timeout: 10m
-          envs: IMAGE_REF,GHCR_USER,GHCR_TOKEN,ENVIRONMENT,AWS_REGION,SSM_DB_PASSWORD_PARAMETER,APP_ENV_FILE,COMPOSE_FILE,APP_PORT,APP_BIND_ADDRESS,ATTACHMENT_DATA_DIR,CONTAINER_NAME
-          script_path: .github/scripts/deploy-ec2.sh
+        shell: bash
+        run: |
+          ssh \
+            -i "$HOME/.ssh/casiq_deploy_key" \
+            -p "${{ vars.EC2_SSH_PORT || '22' }}" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}" \
+            "IMAGE_REF='$IMAGE_REF' \
+             GHCR_USER='$GHCR_USER' \
+             GHCR_TOKEN='$GHCR_TOKEN' \
+             ENVIRONMENT='$ENVIRONMENT' \
+             AWS_REGION='$AWS_REGION' \
+             SSM_DB_PASSWORD_PARAMETER='$SSM_DB_PASSWORD_PARAMETER' \
+             APP_ENV_FILE='$APP_ENV_FILE' \
+             COMPOSE_FILE='$COMPOSE_FILE' \
+             APP_PORT='$APP_PORT' \
+             APP_BIND_ADDRESS='$APP_BIND_ADDRESS' \
+             ATTACHMENT_DATA_DIR='$ATTACHMENT_DATA_DIR' \
+             CONTAINER_NAME='$CONTAINER_NAME' \
+             sh /opt/casiq/deploy-ec2.sh"

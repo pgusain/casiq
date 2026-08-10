@@ -78,6 +78,23 @@ jobs:
     steps:
       - name: Check out deployment script
         uses: actions/checkout@v7
+      - name: Inspect EC2 SSH host keys
+        shell: bash
+        run: |
+          echo "Host: ${{ vars.EC2_HOST }}"
+      
+          echo "ED25519:"
+          ssh-keyscan -t ed25519 "${{ vars.EC2_HOST }}" 2>/dev/null \
+            | ssh-keygen -lf - || true
+      
+          echo "ECDSA:"
+          ssh-keyscan -t ecdsa "${{ vars.EC2_HOST }}" 2>/dev/null \
+            | ssh-keygen -lf - || true
+      
+          echo "RSA:"
+          ssh-keyscan -t rsa "${{ vars.EC2_HOST }}" 2>/dev/null \
+            | ssh-keygen -lf - || true
+            
       - name: Deploy image to development EC2
         uses: appleboy/ssh-action@v1
         with:

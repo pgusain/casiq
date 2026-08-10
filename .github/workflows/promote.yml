@@ -106,6 +106,7 @@ jobs:
           command_timeout: 10m
           envs: IMAGE_REF,GHCR_USER,GHCR_TOKEN,ENVIRONMENT,AWS_REGION,SSM_DB_PASSWORD_PARAMETER,APP_ENV_FILE,COMPOSE_FILE,APP_PORT,APP_BIND_ADDRESS,ATTACHMENT_DATA_DIR,CONTAINER_NAME
           script_path: .github/scripts/deploy-ec2.sh
+          debug: true
   deploy-production:
     name: Promote to production
     needs:

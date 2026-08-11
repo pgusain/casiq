@@ -46,8 +46,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class UserManagementResourceTest {
-    private static final String INITIAL_PASSWORD = "InitialPass-123";
-    private static final String ADMIN_PASSWORD = "AdminSecure-456";
+    private static final String INITIAL_PASSWORD = "password";
+    private static final String ADMIN_PASSWORD = "password";
 
     @Inject PasswordService passwords;
     @Inject WorkAccountService workAccounts;
@@ -60,7 +60,7 @@ class UserManagementResourceTest {
 
     @Test
     void flywayCreatesTheInitialAdministratorOnAnEmptyDatabase() {
-        login(new Seed("TESTROOT", "initial.admin"), "casiq-dummy-password-never-used")
+        login(new Seed("CASIQ", "admin"), "password")
                 .then().statusCode(200)
                 .body("role", equalTo("GLOBAL_ADMIN"))
                 .body("mustChangePassword", equalTo(true));

@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @QuarkusTest
 class UserManagementResourceTest {
     private static final String INITIAL_PASSWORD = "password";
-    private static final String ADMIN_PASSWORD = "password";
+    private static final String ADMIN_PASSWORD = "P@ssword1234";
 
     @Inject PasswordService passwords;
     @Inject WorkAccountService workAccounts;

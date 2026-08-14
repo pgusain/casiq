@@ -82,6 +82,7 @@ public interface EmailProviderConnector {
             Instant accessTokenExpiresAt,
             String recipient,
             String subject,
+            String sourceProviderMessageId,
             String providerThreadId,
             String inReplyTo,
             String referenceIds,

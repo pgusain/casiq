@@ -2,7 +2,7 @@
 
 Casiq is a Java 17 / Quarkus multi-module SaaS application. It produces one
 Quarkus application on port `8080`, composed from tenant-aware user management and
-the Gmail account connector.
+Google Gmail and Microsoft 365 email connectors.
 
 ## Modules
 
@@ -16,6 +16,7 @@ the Gmail account connector.
 | `work-account-management` | Parent module for work-account connectors |
 | `work-account-management/work-account-core` | Tenant-scoped work accounts, work-item mapping, connection metadata, and APIs |
 | `work-account-management/gmail-account-connector` | Pluggable Gmail backend library containing PKCE, token exchange, and endpoints |
+| `work-account-management/microsoft-account-connector` | Pluggable Microsoft 365 backend library containing Entra PKCE authorization and Microsoft Graph mailbox operations |
 | `user-experience` | Pluggable root-level UI library containing the Gmail console and user-management screens |
 
 The feature and UI modules have no Quarkus application plugin or independent
@@ -26,28 +27,19 @@ runtime. `casiq-application` packages them into one application on port `8080`.
 The complete schema, reference data, starter workflows, and initial administrator
 are installed by the consolidated root-level Flyway migration
 `V1__baseline.sql`. It is intended for a new, empty database. The runnable
-application packages and automatically applies it during startup. Set these values
-before the first run:
+application packages and automatically applies it during startup. Generate the
+initial administrator's BCrypt hash before the first run:
 
 ```bash
-cp .env.example .env
-
 # Generate a bcrypt hash without storing the temporary plaintext password in Git.
 # htpasswd is supplied by Apache HTTP Server tools.
 htpasswd -bnBC 12 "" 'choose-a-temporary-password' | tr -d ':\n'
 ```
 
-Copy the resulting hash into `INITIAL_ADMIN_PASSWORD_HASH` in `.env`, then set the
-database connection, company code, and username. Migrations run automatically when
-the application starts. The root Maven commands remain available for inspection or
-manual deployment workflows:
-
-```bash
-set -a && source .env && set +a
-mvn -N flyway:info
-mvn -N flyway:migrate
-mvn -N flyway:validate
-```
+Store the hash in the active environment's SSM
+`initial-admin-password-hash` parameter, then set that path's database connection,
+company code, and username parameters. Migrations run automatically when the
+application starts.
 
 For the consolidated baseline, recreate the entire database (including removal of
 the old `flyway_schema_history` table) before starting the application. Do not run
@@ -59,18 +51,19 @@ No default administrator password is committed. Flyway creates the configured
 account as `GLOBAL_ADMIN` with `must_change_password = true`; the user must replace
 the temporary deployment password immediately after the first login.
 
-Build the library modules once, then start the single application:
+Build the library modules once, then start the single application with the
+development profile. Your local AWS credentials must be able to read
+`/casiq/development/` from SSM in `ap-south-1`:
 
 ```bash
-set -a && source .env && set +a
 mvn install -DskipTests
-mvn -f casiq-application/pom.xml quarkus:dev
+mvn -f casiq-application/pom.xml quarkus:dev -Dquarkus.profile=development
 ```
 
 Open <http://localhost:8080/> for login and user administration, or
-<http://localhost:8080/gmail/> for the Gmail connector console. For local HTTP, keep
-`SESSION_COOKIE_SECURE=false`; use the default secure cookie setting in an HTTPS
-deployment.
+<http://localhost:8080/gmail/> for the Gmail connector console. For local HTTP,
+set `casiq.security.cookie-secure=false` in the development profile; keep it true
+for an HTTPS deployment.
 
 ## EC2 promotion workflow
 
@@ -80,6 +73,36 @@ deployment.
 `production` Environment. Configure a required reviewer on `production` to make
 promotion an explicit approval gate.
 
+Shared application settings (ports, batch sizes, polling intervals, and so on)
+are literal values in `application.properties`. The `development` and
+`production` profiles enable the Quarkus SSM config source and read separate
+paths in the same AWS account and `ap-south-1` region. The application decrypts
+parameters itself at startup; the deploy workflow does not copy them into
+environment variables or a temporary file.
+
+Create each suffix below under both `/casiq/development/` and
+`/casiq/production/` (for example `/casiq/development/db-password` and
+`/casiq/production/db-password`):
+
+| Parameter suffix | Recommended SSM type |
+| --- | --- |
+| `db-url` | `String` |
+| `db-username` | `String` |
+| `db-password` | `SecureString` |
+| `initial-admin-company-code` | `String` |
+| `initial-admin-username` | `String` |
+| `initial-admin-password-hash` | `SecureString` |
+| `google-client-id` | `String` |
+| `google-client-secret` | `SecureString` |
+| `google-redirect-uri` | `String` |
+| `microsoft-client-id` | `String` |
+| `microsoft-client-secret` | `SecureString` |
+| `microsoft-tenant` | `String` |
+| `microsoft-redirect-uri` | `String` |
+
+Quarkus selects the profile-specific file from `QUARKUS_PROFILE`, which the
+workflow defaults to `development` or `production` for the corresponding job.
+
 Create both GitHub Environments with these environment variables:
 
 | Variable | Purpose |
@@ -88,18 +111,21 @@ Create both GitHub Environments with these environment variables:
 | `EC2_USER` | SSH user with permission to run Docker |
 | `EC2_SSH_PORT` | SSH port; defaults to `22` |
 | `EC2_HOST_FINGERPRINT` | SHA-256 SSH host fingerprint |
-| `APP_ENV_FILE` | Absolute path to the pre-provisioned application env file |
+| `QUARKUS_PROFILE` | Quarkus profile to activate; defaults to `development` / `production` per job |
 | `APP_URL` | Public URL recorded on the GitHub deployment |
 | `APP_PORT` | Host port mapped to container port `8080` |
 | `APP_BIND_ADDRESS` | Host bind address; defaults to `127.0.0.1` for a local reverse proxy |
 | `ATTACHMENT_DATA_DIR` | Persistent host attachment directory |
 | `CONTAINER_NAME` | Environment-specific Docker container name |
 
-Add `EC2_SSH_KEY` as an environment secret in both environments. Each EC2 host
-must have Docker and `curl`, be able to pull this repository's GHCR package, and
-already contain the `APP_ENV_FILE`. At minimum that file should configure
-`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, the initial-admin placeholders, Google
-OAuth values, and `SESSION_COOKIE_SECURE`. The deploy script keeps attachment
+Add `EC2_SSH_KEY` as an environment secret in both environments. No AWS
+credentials are passed through the workflow or the SSH session: each EC2 host
+must carry an instance profile authorizing `ssm:GetParametersByPath` on only
+its environment path (and `kms:Decrypt` if `SecureString` parameters use a
+customer-managed key). The container must be able to reach EC2 instance
+metadata; when IMDSv2 is required, configure the instance metadata response hop
+limit to allow container access. Each host needs Docker and `curl` and must be
+able to pull this repository's GHCR package. The deploy script keeps attachment
 storage on the host and rolls back to the previous image if the new container
 does not answer its HTTP health check.
 
@@ -201,7 +227,8 @@ Create an OAuth 2.0 **Web application** credential in Google Cloud and register:
 http://localhost:8080/api/v1/gmail/callback
 ```
 
-Set the three `GOOGLE_*` values in `.env` before starting the same application.
+Set the active profile's `google-client-id`, `google-client-secret`, and
+`google-redirect-uri` SSM parameters before starting the application.
 The Gmail page at <http://localhost:8080/gmail/> is the OAuth test console. It requests
 `openid`, `email`, `profile`, Gmail read-only, and Gmail send permission, with offline
 consent so Google can return a refresh token. Existing Google work accounts must be
@@ -214,42 +241,69 @@ configured email, then stores the access token, refresh token, and access-token 
 server-side. Work-account API responses expose connection status and expiry, never the
 stored token values. Changing a work account's email clears its prior connection.
 
+## Microsoft 365 connector
+
+Create a Microsoft Entra **Web** app registration and register:
+
+```text
+http://localhost:8080/api/v1/microsoft/callback
+```
+
+Grant delegated `User.Read`, `Mail.ReadWrite`, and `Mail.Send` permissions. The
+connector also requests `openid`, `profile`, `email`, and `offline_access` during
+authorization. Set the active profile's `microsoft-client-id`,
+`microsoft-client-secret`, `microsoft-tenant`, and `microsoft-redirect-uri` SSM
+parameters. Use `organizations` for the tenant unless the app registration must
+be single-tenant.
+
+Microsoft 365 work accounts use Microsoft Graph to verify the selected mailbox,
+rotate refresh tokens, page the Inbox incrementally, fetch HTML and file
+attachments, and create threaded MIME replies. Graph requests opt into immutable
+Outlook IDs so stored provider message IDs remain valid when reply drafts move to
+Sent Items.
+
 The baseline provides the `GOOGLE` and `MICROSOFT` reference values. The durable
 `work_account` row stores
 the email, provider, and refresh token; short-lived access tokens are stored in the
 one-to-one `email_polling_config` row with their expiry and next-refresh timestamp.
-Changing the email or provider clears both credential states. Google routes to the
-Gmail OAuth connector; Microsoft is available as reference data and returns a clear
-not-configured response until its connector is implemented.
+Changing the email or provider clears both credential states. The provider code
+routes authorization, polling, direct reads, replies, and conversation matching to
+the corresponding connector.
 
 ### Incremental email polling
 
 The baseline includes polling cursors and expiring leases in
 `email_polling_config`, plus the
 `work_account_conversation` table. Each scheduler pass atomically claims at most
-`EMAIL_POLLING_BATCH_SIZE` due configurations using `FOR UPDATE SKIP LOCKED` and
-sets a lease for `EMAIL_POLLING_LOCK_SECONDS`. This prevents another application
+the configured `casiq.email-polling.batch-size` due configurations using
+`FOR UPDATE SKIP LOCKED` and sets a lease for
+`casiq.email-polling.lock-seconds`. This prevents another application
 instance from claiming the same mailbox during that window.
 
 The scheduler, leasing, worker pool, provider dispatch, and conversation persistence
 live in `work-account-core`. Claimed records are submitted to a dedicated pool of
 10 worker threads, and the configured provider code selects an
-`EmailProviderConnector` implementation. The Gmail module implements that contract
-for `GOOGLE`; it refreshes expired access tokens and returns messages newer than
-`last_polled_at` to the core workflow. The unique
+`EmailProviderConnector` implementation. The Gmail and Microsoft 365 modules
+implement that contract for `GOOGLE` and `MICROSOFT`; each refreshes expired access
+tokens and returns messages newer than `last_polled_at` to the core workflow. The unique
 `work_account_id + provider_message_id` constraint makes repeated delivery
 idempotent. Successful polls advance `last_polled_at` and `next_refresh_at`;
 failures release the lease, record the error, and schedule a configured retry.
-Polling limits, intervals, and initial lookback are configured through the
-`EMAIL_POLLING_*` values; Gmail's page size uses `GMAIL_POLLING_PAGE_SIZE` in
-`.env.example`. Gmail attachments are downloaded through the provider connector and
-stored with the source conversation. `GMAIL_MAX_ATTACHMENT_BYTES` bounds each
-attachment (25 MiB by default) so one message cannot consume unbounded worker memory.
+Polling limits, intervals, initial lookback, provider page sizes, and attachment
+limits are literal `casiq.email-polling.*`, `casiq.gmail.*`, and
+`casiq.microsoft.*` values in `application.properties`. Attachments are downloaded
+through the provider connector and stored with the source conversation; the default
+25 MiB per-attachment limits prevent one message from consuming unbounded worker
+memory.
 
 The conversation schema stores the RFC `Message-ID`, `In-Reply-To`, and
 `References` headers as dedicated conversation
 columns. It also records each message as `INBOUND` or `OUTBOUND`, allowing replies
 to be linked to the provider thread without parsing the stored JSON payload.
+Conversation-to-work-item matching is also provider-owned: Gmail matches Gmail
+thread IDs, while Microsoft 365 first matches Outlook conversation IDs and then
+falls back to RFC reply/reference headers. The work-item module exposes only
+tenant- and provider-scoped lookups and does not encode provider semantics.
 
 ### Conversation work-item creation
 
@@ -261,11 +315,11 @@ execution at the definition's initial status. The execution has a unique
 
 Processing, lease, retry, and error state are part of
 `work_account_conversation`. Each scheduler pass
-claims at most `CONVERSATION_WORK_ITEM_BATCH_SIZE` records with
+claims at most `casiq.conversation-work-item.batch-size` records with
 `FOR UPDATE SKIP LOCKED`, applies an expiring lease, and submits them to a dedicated
 10-thread worker pool. Failed records are released and delayed until the configured
 retry time. Scheduler interval, batch size, lock duration, and retry delay use the
-`CONVERSATION_WORK_ITEM_*` settings in `.env.example`.
+`casiq.conversation-work-item.*` settings in `application.properties`.
 
 The work-item screen only lists non-terminal tasks for which the current user has
 a status or transition assignment applicable to the task's current status. It
@@ -336,14 +390,14 @@ work-item-level documents without an email link. Inbound email attachments and
 internal uploads are stored through the `attachment-storage` module, while
 outbound document rows record exactly which files were sent.
 
-Local development defaults to `ATTACHMENT_STORAGE_PROVIDER=local` and stores files
-below `ATTACHMENT_LOCAL_ROOT`, partitioned by tenant ID. For production, build and
-run with `ATTACHMENT_STORAGE_PROVIDER=s3`. S3 mode derives a separate bucket name
-for every tenant as `<ATTACHMENT_S3_BUCKET_PREFIX><tenant ID>`. Provision those
-buckets before use and grant the application `s3:PutObject` and `s3:GetObject`
-only for the applicable tenant buckets. The S3 client reads `AWS_REGION` and uses
-the AWS SDK default credential provider chain; static cloud credentials are not
-stored in Casiq configuration.
+Local attachment storage uses `casiq.attachment-storage.provider=local` and stores
+files below `casiq.attachment-storage.local-root`, partitioned by tenant ID. Set the
+provider to `s3` in the applicable profile when needed. S3 mode derives a separate
+bucket name for every tenant as `<casiq.attachment-storage.s3-bucket-prefix><tenant
+ID>`. Provision those buckets before use and grant the application `s3:PutObject`
+and `s3:GetObject` only for the applicable tenant buckets. The S3 client uses the
+configured `ap-south-1` region and the AWS SDK default credential provider chain;
+static cloud credentials are not stored in Casiq configuration.
 
 Application users include first and last names. Both values are required when
 administrators create new users and are
@@ -368,15 +422,16 @@ provider message, hydrates `content_html`, and renders that HTML in the sandboxe
 work-item communication frame.
 
 The retention scheduler can delete processed materialized conversations after
-`CONVERSATION_RETENTION_HOURS` (180 days by default). It is disabled by default
+`casiq.conversation-retention.hours` (180 days by default). It is disabled by default
 and, when enabled, operates in bounded batches using
 database row locks and `SKIP LOCKED` so multiple application instances can run it
-safely. Cached bodies are cleared after `WORK_ITEM_CACHE_FALLBACK_HOURS`.
+safely. Cached bodies are cleared after
+`casiq.conversation-retention.cache-fallback-hours`.
 Provider message IDs remain in the durable ledger, preventing an old message from
 being ingested again after its materialized row has been purged. New messages on
 an existing provider thread continue to attach to the original work item.
-Set `WORK_ITEM_PROVIDER_READ_ENABLED=false` to use metadata/cache only. Set
-`CONVERSATION_RETENTION_ENABLED=true` only when automatic conversation cleanup
+Set `casiq.work-item.provider-read-enabled=false` to use metadata/cache only. Set
+`casiq.conversation-retention.enabled=true` only when automatic conversation cleanup
 should be enabled.
 
 ### Completed work-item archive
@@ -392,7 +447,7 @@ status activity, inbound and outbound communication timeline, internal notes,
 document metadata, and document content. The object key is
 `work-items/<execution ID>.json` inside the tenant's configured storage. In S3
 mode this is the tenant-specific bucket described above; local development uses
-the same logical layout below `ATTACHMENT_LOCAL_ROOT`.
+the same logical layout below `casiq.attachment-storage.local-root`.
 
 Detail rows are purged only after the JSON write succeeds. The primary
 `work_item_execution` row remains available for tenant search and list views and
@@ -402,9 +457,9 @@ document downloads from the JSON object. `CANCELLED` and other non-completed
 executions are not archived.
 
 The schedule, time zone, claim size, lease, retry delay, and worker count use the
-`WORK_ITEM_ARCHIVE_*` settings in `.env.example`. Set
-`WORK_ITEM_ARCHIVE_ENABLED=true` only when completed work-item archival and
-detail purging should be enabled.
+`casiq.work-item-archive.*` settings in `application.properties`. Enable
+`casiq.work-item-archive.enabled` only when completed work-item archival and detail
+purging should be enabled.
 
 The consolidated baseline includes composite indexes for tenant work queues,
 definition/status filters, normalized work-account
@@ -415,7 +470,7 @@ function on every row.
 The email-polling and conversation-to-work-item schedulers, claim services,
 workers, provider connector, and workflow service emit structured lifecycle,
 batch, success, retry, failure, filter, and transition logs. INFO is the default;
-set `CASIQ_LOG_LEVEL=DEBUG` to include lease decisions, empty scheduler passes,
+set `quarkus.log.category."com.casiq".level=DEBUG` to include lease decisions, empty scheduler passes,
 provider pagination, and worker boundaries. Credentials and email bodies are not
 written to logs.
 

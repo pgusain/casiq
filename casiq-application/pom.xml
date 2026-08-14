@@ -34,6 +34,11 @@
     </dependency>
     <dependency>
       <groupId>com.casiq</groupId>
+      <artifactId>microsoft-account-connector</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.casiq</groupId>
       <artifactId>work-account-core</artifactId>
       <version>${project.version}</version>
     </dependency>
@@ -45,6 +50,14 @@
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-flyway</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkiverse.amazonservices</groupId>
+      <artifactId>quarkus-amazon-ssm</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>url-connection-client</artifactId>
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>

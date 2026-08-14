@@ -125,20 +125,35 @@ public class WorkAccountService {
     public WorkAccountView completeGmailConnection(Long accountId, String connectedEmailId,
                                                    String accessToken, String refreshToken,
                                                    Instant accessTokenExpiresAt) {
+        return completeEmailConnection(accountId, "GOOGLE", "Google", connectedEmailId,
+                accessToken, refreshToken, accessTokenExpiresAt);
+    }
+
+    @Transactional
+    public WorkAccountView completeEmailConnection(
+            Long accountId,
+            String providerCode,
+            String providerName,
+            String connectedEmailId,
+            String accessToken,
+            String refreshToken,
+            Instant accessTokenExpiresAt) {
         WorkAccountEntity account = WorkAccountEntity.findById(accountId);
         if (account == null) throw new NotFoundException("Work account not found");
         account.tenant = TenantEntity.findById(account.tenant.id);
         account.workItemDefinition = WorkItemDefinitionEntity.findById(account.workItemDefinition.id);
         account.provider = EmailProviderEntity.findById(account.provider.id);
-        if (!"GOOGLE".equals(account.provider.code)) {
-            throw new BadRequestException("Work account provider is not GOOGLE");
+        if (!providerCode.equals(account.provider.code)) {
+            throw new BadRequestException("Work account provider is not " + providerCode);
         }
         if (!account.normalizedEmailId.equals(normalizeEmail(connectedEmailId))) {
-            throw new BadRequestException("The selected Gmail account does not match " + account.emailId);
+            throw new BadRequestException(
+                    "The selected " + providerName + " account does not match " + account.emailId);
         }
         if ((refreshToken == null || refreshToken.isBlank())
                 && (account.refreshToken == null || account.refreshToken.isBlank())) {
-            throw new BadRequestException("Google did not return an offline refresh token; reconnect with consent");
+            throw new BadRequestException(
+                    providerName + " did not return an offline refresh token; reconnect with consent");
         }
 
         Instant now = Instant.now();

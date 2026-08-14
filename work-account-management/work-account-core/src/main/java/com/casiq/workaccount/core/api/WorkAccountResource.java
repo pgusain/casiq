@@ -2,6 +2,8 @@ package com.casiq.workaccount.core.api;
 
 import com.casiq.usermanagement.api.AuthResource;
 import com.casiq.workaccount.core.service.WorkAccountService;
+import com.casiq.workaccount.core.service.EmailProviderAuthorization;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
@@ -18,6 +20,7 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.BadRequestException;
 
 import java.util.List;
 
@@ -26,6 +29,7 @@ import java.util.List;
 @Produces(MediaType.APPLICATION_JSON)
 public class WorkAccountResource {
     @Inject WorkAccountService workAccounts;
+    @Inject Instance<EmailProviderAuthorization> authorizations;
 
     @GET
     public List<WorkAccountView> list(
@@ -39,6 +43,21 @@ public class WorkAccountResource {
     public List<WorkAccountService.EmailProviderView> providers(
             @CookieParam(AuthResource.SESSION_COOKIE) String token) {
         return workAccounts.providers(token);
+    }
+
+    @POST
+    @Path("/{id}/authorize")
+    @Consumes(MediaType.WILDCARD)
+    public EmailProviderAuthorization.AuthorizationResponse authorize(
+            @CookieParam(AuthResource.SESSION_COOKIE) String token,
+            @PathParam("id") Long id) {
+        WorkAccountService.WorkAccountTarget account = workAccounts.requireManageable(token, id);
+        EmailProviderAuthorization authorization = authorizations.stream()
+                .filter(candidate -> account.provider().equals(candidate.providerCode()))
+                .findFirst()
+                .orElseThrow(() -> new BadRequestException(
+                        "No authorization connector is configured for " + account.provider()));
+        return authorization.beginAuthorization(account.id(), account.emailId());
     }
 
     @POST

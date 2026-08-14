@@ -5,7 +5,7 @@ let availableWorkItems = [];
 let effectiveWorkItems = [];
 let assignmentWorkItems = [];
 let emailProviders = [];
-let gmailPopup;
+let emailOAuthPopup;
 let myWorkPage = 0;
 let activeWorkItemId;
 let workQueueScope = 'MY';
@@ -396,22 +396,27 @@ async function loadMyWork() {
         'div',
         'workflow-cell workflow-number',
         String(execution.workItemNumber));
+      number.dataset.label = 'Number';
       const subject = documentNode('div', 'workflow-cell workflow-subject');
+      subject.dataset.label = 'Subject';
       subject.append(
         documentNode('strong', '', abbreviatedSubject(execution.emailSubject)),
         documentNode('small', '', execution.emailSubject ? 'Email subject' : 'No email subject')
       );
       const sender = documentNode('div', 'workflow-cell workflow-sender');
+      sender.dataset.label = 'Sender';
       sender.append(
         documentNode('strong', '', execution.emailSender || '—'),
         documentNode('small', '', execution.emailSender ? 'Email sender' : 'No email sender')
       );
       const typeCell = documentNode('div', 'workflow-cell workflow-type');
+      typeCell.dataset.label = 'Work item';
       typeCell.append(
         documentNode('strong', '', execution.workItemDisplayName),
         documentNode('small', '', execution.workItemType)
       );
       const state = documentNode('div', 'workflow-cell workflow-state');
+      state.dataset.label = 'Status';
       state.append(documentNode('span', '', execution.currentStatusDisplayName));
       state.append(documentNode(
         'small',
@@ -423,7 +428,9 @@ async function loadMyWork() {
         'div',
         'workflow-cell workflow-updated',
         new Date(execution.updatedAt).toLocaleString());
+      updated.dataset.label = 'Last updated';
       const actions = document.createElement('div'); actions.className = 'workflow-actions';
+      actions.dataset.label = 'Actions';
       const open = document.createElement('button');
       open.className = 'workflow-open-icon';
       open.textContent = '→';
@@ -1029,9 +1036,9 @@ async function openWorkAccountForm(account = null) {
 async function connectEmailProvider(account) {
   try {
     const authorization = await api(`/api/v1/work-accounts/${account.id}/authorize`, {method:'POST'});
-    gmailPopup = window.open(authorization.authorizationUrl, 'casiq-work-account-email', 'popup,width=560,height=720');
-    if (!gmailPopup) throw new Error('The OAuth popup was blocked. Allow popups and try again.');
-    gmailPopup.focus();
+    emailOAuthPopup = window.open(authorization.authorizationUrl, 'casiq-work-account-email', 'popup,width=560,height=720');
+    if (!emailOAuthPopup) throw new Error('The OAuth popup was blocked. Allow popups and try again.');
+    emailOAuthPopup.focus();
   } catch (cause) { notice(cause.message, true); }
 }
 
@@ -1360,9 +1367,14 @@ function setWorkQueueScope(scope) {
 $('#logout').onclick = async () => { await api('/api/v1/auth/logout', {method:'POST'}); currentUser = null; show('login-view'); };
 
 window.addEventListener('message', event => {
-  if (event.origin !== window.location.origin || event.data?.type !== 'casiq-google-oauth') return;
+  if (event.origin !== window.location.origin
+      || !['casiq-google-oauth', 'casiq-email-oauth'].includes(event.data?.type)) return;
   if (event.data.error) notice(event.data.error, true);
-  if (event.data.workAccount) { notice(`Google connected for ${event.data.workAccount.emailId}.`); loadWorkAccounts(); }
+  if (event.data.workAccount) {
+    const provider = event.data.provider === 'MICROSOFT' ? 'Microsoft 365' : 'Google';
+    notice(`${provider} connected for ${event.data.workAccount.emailId}.`);
+    loadWorkAccounts();
+  }
 });
 
 (async function initialize() {

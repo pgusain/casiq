@@ -11,6 +11,7 @@ import com.casiq.workitem.service.WorkItemDefinitionService;
 import com.casiq.workitem.service.WorkItemNumberService;
 import io.quarkus.hibernate.orm.panache.Panache;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.persistence.LockModeType;
 import jakarta.transaction.Transactional;
@@ -20,11 +21,13 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 @ApplicationScoped
 public class ConversationWorkItemProcessor {
     private static final Logger LOG = Logger.getLogger(ConversationWorkItemProcessor.class);
     @Inject WorkItemNumberService workItemNumbers;
+    @Inject Instance<ConversationWorkItemMatcher> conversationMatchers;
     @ConfigProperty(name = "casiq.work-item.email-cache-seconds", defaultValue = "300")
     long emailCacheSeconds;
 
@@ -77,6 +80,7 @@ public class ConversationWorkItemProcessor {
         String workAccountEmail = String.valueOf(source[2]);
         Long definitionId = longValue(source[3]);
         String providerThreadId = nullableString(source[11]);
+        String providerCode = String.valueOf(source[12]);
 
         // Serialize execution creation for one mailbox. Without this lock, two
         // simultaneously claimed messages from a new provider thread could both
@@ -92,13 +96,22 @@ public class ConversationWorkItemProcessor {
 
         WorkItemExecutionEntity existing =
                 WorkItemExecutionEntity.find("conversationId", conversationId).firstResult();
-        if (existing == null && providerThreadId != null && !providerThreadId.isBlank()) {
-            WorkItemCommunicationEntity prior =
-                    WorkItemCommunicationEntity.find(
-                            "workAccountId = ?1 and providerThreadId = ?2 order by createdAt",
-                            workAccountId, providerThreadId).firstResult();
-            if (prior != null) {
-                existing = prior.execution;
+        if (existing == null) {
+            ConversationWorkItemMatcher matcher = conversationMatchers.stream()
+                    .filter(candidate -> providerCode.equals(candidate.providerCode()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "No conversation matcher is configured for " + providerCode));
+            Optional<Long> matchingExecution = matcher.matchingExecution(
+                    new ConversationWorkItemMatcher.InboundConversation(
+                            String.valueOf(source[13]),
+                            providerThreadId,
+                            nullableString(source[14]),
+                            nullableString(source[15]),
+                            nullableString(source[16])),
+                    new CommunicationLookup(workAccountId, providerCode));
+            if (matchingExecution.isPresent()) {
+                existing = WorkItemExecutionEntity.findById(matchingExecution.get());
             }
         }
         Long executionId;
@@ -300,5 +313,40 @@ public class ConversationWorkItemProcessor {
         if (value instanceof java.time.OffsetDateTime offset) return offset.toInstant();
         if (value instanceof java.sql.Timestamp timestamp) return timestamp.toInstant();
         return Instant.parse(String.valueOf(value));
+    }
+
+    private static final class CommunicationLookup
+            implements ConversationWorkItemMatcher.ExistingConversationLookup {
+        private final Long workAccountId;
+        private final String providerCode;
+
+        private CommunicationLookup(Long workAccountId, String providerCode) {
+            this.workAccountId = workAccountId;
+            this.providerCode = providerCode;
+        }
+
+        @Override
+        public Optional<Long> byProviderThreadId(String providerThreadId) {
+            if (providerThreadId == null || providerThreadId.isBlank()) return Optional.empty();
+            WorkItemCommunicationEntity communication = WorkItemCommunicationEntity.find(
+                    "workAccountId = ?1 and providerCode = ?2 and providerThreadId = ?3 order by createdAt desc",
+                    workAccountId, providerCode, providerThreadId).firstResult();
+            return executionId(communication);
+        }
+
+        @Override
+        public Optional<Long> byRfcMessageId(String rfcMessageId) {
+            if (rfcMessageId == null || rfcMessageId.isBlank()) return Optional.empty();
+            WorkItemCommunicationEntity communication = WorkItemCommunicationEntity.find(
+                    "workAccountId = ?1 and providerCode = ?2 and rfcMessageId = ?3 order by createdAt desc",
+                    workAccountId, providerCode, rfcMessageId).firstResult();
+            return executionId(communication);
+        }
+
+        private static Optional<Long> executionId(WorkItemCommunicationEntity communication) {
+            return communication == null || communication.execution == null
+                    ? Optional.empty()
+                    : Optional.of(communication.execution.id);
+        }
     }
 }

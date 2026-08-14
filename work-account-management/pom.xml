@@ -9,5 +9,6 @@
   <modules>
     <module>work-account-core</module>
     <module>gmail-account-connector</module>
+    <module>microsoft-account-connector</module>
   </modules>
 </project>

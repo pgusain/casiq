@@ -46,8 +46,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class UserManagementResourceTest {
-    private static final String INITIAL_PASSWORD = "password";
-    private static final String ADMIN_PASSWORD = "P@ssword1234";
+    private static final String INITIAL_PASSWORD = "InitialPass-123";
+    private static final String ADMIN_PASSWORD = "AdminSecure-456";
 
     @Inject PasswordService passwords;
     @Inject WorkAccountService workAccounts;
@@ -60,7 +60,7 @@ class UserManagementResourceTest {
 
     @Test
     void flywayCreatesTheInitialAdministratorOnAnEmptyDatabase() {
-        login(new Seed("CASIQ", "admin"), "password")
+        login(new Seed("TESTROOT", "initial.admin"), "casiq-dummy-password-never-used")
                 .then().statusCode(200)
                 .body("role", equalTo("GLOBAL_ADMIN"))
                 .body("mustChangePassword", equalTo(true));
@@ -808,7 +808,13 @@ class UserManagementResourceTest {
         String microsoftAccountId = account.jsonPath().getString("id");
         given().cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .when().post("/api/v1/work-accounts/{id}/authorize", microsoftAccountId)
-                .then().statusCode(501).body("error", containsString("Microsoft"));
+                .then().statusCode(200)
+                .body("authorizationUrl", containsString(
+                        "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize"))
+                .body("authorizationUrl", containsString(
+                        "login_hint=workflow%40example.com"))
+                .body("authorizationUrl", containsString("Mail.ReadWrite"))
+                .body("authorizationUrl", containsString("code_challenge_method=S256"));
 
         given().contentType(ContentType.JSON).cookie(AuthResource.SESSION_COOKIE, adminSession)
                 .body(assignmentBody(tenantId, definitionId, initialStatusId, null, processorId))

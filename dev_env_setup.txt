@@ -1,0 +1,11 @@
+1  sudo apt-get update -y
+    2  sudo yum update -y
+    3  sudo yum install -y docker
+    4  sudo systemctl start docker
+    5  sudo systemctl enable docker
+    6  sudo usermod -aG docker ec2-user
+    7  mkdir -p ~/postgres_data
+    8  docker run -d   --name postgres_dev   -e POSTGRES_USER=casiq_app   -e POSTGRES_PASSWORD=password   -e PGDATA=/var/lib/postgresql/data/pgdata   -p 127.0.0.1:5432:5432   -v ~/postgres_data:/var/lib/postgresql/data   --restart unless-stopped   postgres:16-alpine
+    9  docker network create casiq_network
+   10  docker network connect casiq_network docker postgres_dev
+   11  docker network connect casiq_network postgres_dev

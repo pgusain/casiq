@@ -143,5 +143,97 @@ select option{background:white;color:var(--ink);font-weight:500}
 .connection-status.connected{background:var(--mint);color:var(--green)}
 .connect-gmail{border:0;background:#eef3ff;color:#315b9b;border-radius:7px;padding:6px 8px;font-size:10px;cursor:pointer}
 .work-item{font-size:9px;background:#fff2d7;color:var(--amber);padding:5px 7px;border-radius:11px}
-@media(max-width:900px){.work-list-header{display:none}.workflow-row{grid-template-columns:1fr 1fr}.workflow-actions{grid-column:1/-1;justify-content:flex-start}.work-filter-form{grid-template-columns:1fr 1fr}.work-detail-layout{grid-template-columns:1fr}}
-@media(max-width:620px){.tenant-panel .user-row{align-items:flex-start}.tenant-panel .user-actions{flex-direction:column;align-items:flex-end}.graph-fields,.work-filter-form,.workflow-row,.assignment-target-row{grid-template-columns:1fr}.workflow-actions{grid-column:auto}.workspace-navigation-button{padding:6px}.account-menu{gap:6px}}
+@media(max-width:900px){
+  .work-list-header{display:none}
+  .workflow-row{grid-template-columns:1fr 1fr;gap:14px 18px}
+  .workflow-cell::before,.workflow-actions::before{
+    content:attr(data-label);
+    display:block;
+    margin-bottom:5px;
+    color:var(--muted);
+    font-size:8px;
+    font-weight:800;
+    letter-spacing:.06em;
+    text-transform:uppercase
+  }
+  .workflow-actions{grid-column:1/-1;justify-content:flex-start}
+  .work-filter-form{grid-template-columns:1fr 1fr}
+  .work-detail-layout{grid-template-columns:1fr}
+  .work-detail-side{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .work-detail-side>section:last-child{grid-column:1/-1}
+}
+
+@media(max-width:620px){
+  .workspace-navigation{flex:1;min-width:0}
+  .workspace-navigation-button{flex:1;min-height:38px;padding:6px;font-size:9px;white-space:nowrap}
+  .work-queue-tabs{width:100%}
+  .work-queue-tab{flex:1;min-height:40px}
+  .work-status-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .work-status-tile{min-height:64px;padding:10px}
+  .work-status-count{font-size:22px}
+  .filter-panel summary{min-height:42px;display:flex;align-items:center}
+  .graph-fields,.work-filter-form,.workflow-row,.assignment-target-row{grid-template-columns:1fr}
+  .work-filter-form{padding:12px}
+  .work-filter-form .primary.compact{width:100%}
+  .work-filter-form>.quiet{min-height:40px}
+  .workflow-list{gap:10px;border:0;background:transparent}
+  .workflow-row{gap:12px;padding:14px;border:1px solid var(--line);border-radius:11px;background:white}
+  .workflow-row:last-child{border-bottom:1px solid var(--line)}
+  .workflow-cell{display:grid;grid-template-columns:minmax(76px,.4fr) minmax(0,1fr);gap:10px;align-items:start}
+  .workflow-cell::before{margin:0;padding-top:1px}
+  .workflow-cell strong,.workflow-cell small{grid-column:2}
+  .workflow-cell strong+small{margin-top:-7px}
+  .workflow-state{display:grid}
+  .workflow-state span,.workflow-state small{grid-column:2}
+  .workflow-actions{grid-column:auto;display:grid;grid-template-columns:minmax(76px,.4fr) auto auto;justify-content:start}
+  .workflow-actions::before{margin:0;align-self:center}
+  .workflow-actions .workflow-open-icon,.row-action-menu summary{width:40px;height:40px}
+  .row-action-menu-items{position:fixed;right:10px;bottom:10px;top:auto;left:10px;min-width:0;padding:8px;border-radius:13px}
+  .workflow-actions .row-action-menu-items button,.row-action-menu-empty{min-height:42px;display:flex;align-items:center;white-space:normal}
+  .pagination-bar{justify-content:space-between;gap:8px}
+  .pagination-bar button{min-height:40px;padding:6px}
+  .assignment-workflow-heading{align-items:flex-start;flex-direction:column}
+  .assignment-target-row{gap:10px}
+  .assignment-users{padding-left:0}
+  .checkbox-select{max-height:220px}
+  .checkbox-option{min-height:40px}
+  .work-item-dialog{
+    width:100%;
+    max-width:none;
+    height:100dvh;
+    max-height:100dvh;
+    margin:0;
+    padding:calc(16px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom));
+    border-width:0;
+    border-radius:0;
+    overflow-y:auto;
+    overscroll-behavior:contain
+  }
+  .dialog-close{position:sticky;z-index:5;top:0;float:none;display:flex;justify-content:flex-end;margin:-8px -4px 4px;padding:4px;background:rgba(255,255,255,.96)}
+  .dialog-close button{min-height:40px;padding:7px 10px}
+  .work-item-dialog h2{font-size:20px;overflow-wrap:anywhere}
+  .email-meta{font-size:10px;overflow-wrap:anywhere}
+  .work-detail-side{grid-template-columns:1fr}
+  .work-detail-side>section:last-child{grid-column:auto}
+  .communication-heading{align-items:flex-start;flex-wrap:wrap}
+  .communication-heading::before{flex:none}
+  .communication-heading>div{min-width:0}
+  .communication-direction{margin-left:24px}
+  .communication-frame{height:48vh;min-height:260px}
+  .communication-attachment{align-items:flex-start;flex-direction:column;gap:4px}
+  .communication-attachment span{text-align:left}
+  .editor-toolbar{gap:5px;overflow-x:auto;flex-wrap:nowrap}
+  .editor-toolbar button{flex:none;min-height:38px;padding:7px 10px}
+  .wysiwyg-editor{min-height:180px;font-size:16px}
+  .work-detail-side textarea,.graph-fields textarea{font-size:16px}
+  .reply-file-field input,.work-detail-side input[type=file]{max-width:100%;font-size:10px}
+  .detail-actions{display:flex;flex-wrap:wrap}
+  .detail-actions::before{display:none}
+  .detail-actions button{min-height:42px}
+}
+
+@media(max-width:380px){
+  .work-status-summary{grid-template-columns:1fr 1fr;gap:7px}
+  .work-status-tile{gap:7px}
+  .workflow-cell{grid-template-columns:70px minmax(0,1fr)}
+}

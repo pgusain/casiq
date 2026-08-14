@@ -111,6 +111,7 @@ public class WorkAccountReplyService {
                         config.accessTokenExpiresAt,
                         original.sender,
                         original.subject,
+                        original.providerMessageId,
                         original.providerThreadId,
                         original.rfcMessageId,
                         original.referenceIds,

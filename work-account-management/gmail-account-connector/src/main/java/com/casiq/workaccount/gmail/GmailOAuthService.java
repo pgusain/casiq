@@ -5,6 +5,7 @@ import com.casiq.workaccount.oauth.OAuthTokens;
 import com.casiq.workaccount.oauth.Pkce;
 import com.casiq.workaccount.core.api.WorkAccountView;
 import com.casiq.workaccount.core.service.WorkAccountService;
+import com.casiq.workaccount.core.service.EmailProviderAuthorization;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -20,7 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @ApplicationScoped
-public class GmailOAuthService {
+public class GmailOAuthService implements EmailProviderAuthorization {
     private static final String SCOPE =
             "openid email profile https://www.googleapis.com/auth/gmail.readonly "
                     + "https://www.googleapis.com/auth/gmail.send";
@@ -44,6 +45,7 @@ public class GmailOAuthService {
         return beginAuthorization(null, null);
     }
 
+    @Override
     public AuthorizationResponse beginAuthorization(Long workAccountId, String loginHint) {
         var pkce = Pkce.create();
         Instant expiresAt = attempts.put(pkce.state(), pkce.codeVerifier(), workAccountId);
@@ -69,6 +71,11 @@ public class GmailOAuthService {
                 "https://accounts.google.com/o/oauth2/v2/auth?" + query, expiresAt);
     }
 
+    @Override
+    public String providerCode() {
+        return "GOOGLE";
+    }
+
     public ExchangeResult exchange(String state, String code) {
         if (code == null || code.isBlank()) throw new BadRequestException("Missing Google authorization code");
         var attempt = attempts.consume(state)
@@ -87,17 +94,14 @@ public class GmailOAuthService {
         if (profile.emailAddress() == null || profile.emailAddress().isBlank()) {
             throw new BadRequestException("Google did not return a Gmail email address");
         }
-        WorkAccountView connected = workAccounts.completeGmailConnection(
-                attempt.workAccountId(), profile.emailAddress(), tokens.accessToken(),
-                tokens.refreshToken(), tokens.expiresAt());
+        WorkAccountView connected = workAccounts.completeEmailConnection(
+                attempt.workAccountId(), "GOOGLE", "Google", profile.emailAddress(),
+                tokens.accessToken(), tokens.refreshToken(), tokens.expiresAt());
         return new ExchangeResult(null, connected);
     }
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
-    }
-
-    public record AuthorizationResponse(String authorizationUrl, Instant expiresAt) {
     }
 
     public record ExchangeResult(OAuthTokens tokens, WorkAccountView workAccount) {}

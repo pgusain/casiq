@@ -2,6 +2,7 @@ package com.casiq.workaccount.gmail;
 
 import com.casiq.usermanagement.api.AuthResource;
 import com.casiq.workaccount.core.service.WorkAccountService;
+import com.casiq.workaccount.core.service.EmailProviderAuthorization;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.GET;
@@ -26,13 +27,13 @@ public class GmailOAuthResource {
 
     @POST
     @Path("/authorize")
-    public GmailOAuthService.AuthorizationResponse authorize() {
+    public EmailProviderAuthorization.AuthorizationResponse authorize() {
         return gmail.beginAuthorization();
     }
 
     @POST
     @Path("/work-accounts/{id}/authorize")
-    public GmailOAuthService.AuthorizationResponse authorizeWorkAccount(
+    public EmailProviderAuthorization.AuthorizationResponse authorizeWorkAccount(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @PathParam("id") Long id) {
         var account = workAccounts.requireManageable(token, id);

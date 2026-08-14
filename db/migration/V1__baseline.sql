@@ -471,9 +471,9 @@ INSERT INTO tenant (
 )
 VALUES (
     1,
-    'CASIQ',
-    LOWER('CASIQ'),
-    'CASIQ'
+    '${initial_admin_company_code}',
+    LOWER('${initial_admin_company_code}'),
+    '${initial_admin_company_code}'
 );
 
 INSERT INTO application_user (
@@ -490,11 +490,11 @@ INSERT INTO application_user (
 VALUES (
     1,
     1,
-    'admin',
-    LOWER('admin'),
-    'admin',
+    '${initial_admin_username}',
+    LOWER('${initial_admin_username}'),
+    '${initial_admin_username}',
     '',
-    '$2y$12$6FTuen5UjZl2/M/tx.7tv.G67fq10Tcn97qp6Jd14.9BOfy83M18a%',
+    '${initial_admin_password_hash}',
     'GLOBAL_ADMIN',
     TRUE
 );

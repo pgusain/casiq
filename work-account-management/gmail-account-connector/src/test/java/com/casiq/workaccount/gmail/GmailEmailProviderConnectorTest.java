@@ -76,6 +76,7 @@ class GmailEmailProviderConnectorTest {
                         Instant.now().plusSeconds(3600),
                         "Sender Name <sender@example.com>",
                         "GST filing",
+                        "incoming-1",
                         "thread-1",
                         "<message-1@example.com>",
                         "<older@example.com>",

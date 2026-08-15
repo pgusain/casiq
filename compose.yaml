@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080"
+      - "8080:8080"
 
     environment:
       QUARKUS_DATASOURCE_DB_KIND: postgresql

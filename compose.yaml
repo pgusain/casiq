@@ -6,7 +6,7 @@ services:
 
     environment:
       POSTGRES_DB: casiq
-      POSTGRES_USER: casiq
+      POSTGRES_USER: casiq_app
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
 
     ports:
@@ -16,7 +16,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U casiq -d casiq"]
+      test: ["CMD-SHELL", "pg_isready -U casiq_app -d casiq"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -26,7 +26,7 @@ SSM_DB_PASSWORD_PARAMETER="${SSM_DB_PASSWORD_PARAMETER:-/casiq/${ENVIRONMENT}/da
 NGINX_ENABLED="${NGINX_ENABLED:-true}"
 NGINX_LISTEN_PORT="${NGINX_LISTEN_PORT:-80}"
 NGINX_DOMAIN="${NGINX_DOMAIN:-demo.casiq.co.in}"
-NGINX_REPO_CONFIG="${NGINX_REPO_CONFIG:-ngnix.conf}"
+NGINX_REPO_CONFIG="${NGINX_REPO_CONFIG:-../../ngnix.conf}"
 NGINX_CONFIG_URL="${NGINX_CONFIG_URL:-https://raw.githubusercontent.com/pgusain/casiq/main/ngnix.conf}"
 
 # The runbook downloads Compose from the latest release URL. For production,

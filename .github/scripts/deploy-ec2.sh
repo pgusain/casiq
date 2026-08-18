@@ -28,6 +28,8 @@ NGINX_LISTEN_PORT="${NGINX_LISTEN_PORT:-80}"
 NGINX_DOMAIN="${NGINX_DOMAIN:-demo.example.co.in}"
 NGINX_REPO_CONFIG="${NGINX_REPO_CONFIG:-ngnix.conf}"
 NGINX_CONFIG_URL="${NGINX_CONFIG_URL:-https://raw.githubusercontent.com/pgusain/casiq/main/ngnix.conf}"
+CERTBOT_WEBROOT="${CERTBOT_WEBROOT:-/var/www/certbot}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 
 # The runbook downloads Compose from the latest release URL. For production,
 # set DOCKER_COMPOSE_VERSION to a tested version such as v2.x.y.
@@ -222,6 +224,44 @@ ensure_directories() {
     fi
 }
 
+ensure_certbot() {
+    if command -v certbot >/dev/null 2>&1; then
+        log "certbot is already installed: $(certbot --version 2>&1)"
+        return
+    fi
+
+    log "certbot is missing; installing it."
+    install_packages certbot
+    command -v certbot >/dev/null 2>&1 || fail "certbot installation failed."
+}
+
+check_stale_certificate_references() {
+    log "Checking active nginx configuration for stale certificate references."
+
+    stale_found=0
+    for config_dir in /etc/nginx/conf.d /etc/nginx/sites-enabled; do
+        [ -d "$config_dir" ] || continue
+
+        for config_file in "$config_dir"/*; do
+            [ -f "$config_file" ] || continue
+
+            while IFS= read -r cert_path; do
+                [ -n "$cert_path" ] || continue
+                if ! as_root test -r "$cert_path"; then
+                    warn "Stale nginx certificate reference: $config_file -> $cert_path"
+                    stale_found=1
+                fi
+            done <<EOF
+$(sed -n 's/^[[:space:]]*ssl_certificate\(_key\)\{0,1\}[[:space:]]\{1,\}\([^;[:space:]]*\).*/\2/p' "$config_file" 2>/dev/null || true)
+EOF
+        done
+    done
+
+    if [ "$stale_found" -eq 1 ]; then
+        fail "Stale certificate references remain in nginx configuration. Remove or correct them before continuing."
+    fi
+}
+
 ensure_nginx() {
     if [ "$NGINX_ENABLED" != "true" ]; then
         log "NGINX_ENABLED=$NGINX_ENABLED; skipping nginx setup."
@@ -234,12 +274,99 @@ ensure_nginx() {
     else
         log "nginx is already installed: $(nginx -v 2>&1)"
     fi
-
     command -v nginx >/dev/null 2>&1 || fail "nginx installation failed."
 
-    # The source of truth is ngnix.conf from the repository root. When the
-    # deployment action copies that file to the EC2 working directory we use
-    # it directly. Otherwise retrieve the same file from GitHub.
+    as_root mkdir -p /etc/nginx/conf.d
+    NGINX_TARGET="/etc/nginx/conf.d/casiq.conf"
+    NGINX_BOOTSTRAP="/etc/nginx/conf.d/casiq-bootstrap.conf"
+    CERT_LIVE_DIR="/etc/letsencrypt/live/${NGINX_DOMAIN}"
+    CERT_FULLCHAIN="${CERT_LIVE_DIR}/fullchain.pem"
+    CERT_PRIVKEY="${CERT_LIVE_DIR}/privkey.pem"
+
+    # Always clear the final CASIQ config and any previous bootstrap config first.
+    # This prevents nginx -t/start from reading TLS paths before certificates exist.
+    log "Removing existing CASIQ nginx configuration before TLS verification."
+    as_root rm -f "$NGINX_TARGET"
+    as_root rm -f "$NGINX_BOOTSTRAP"
+
+    # Remove package defaults that could compete for port 80/443.
+    if [ "$PACKAGE_FAMILY" = "apt" ]; then
+        as_root rm -f /etc/nginx/sites-enabled/default
+    fi
+
+    check_stale_certificate_references
+
+    if as_root test -r "$CERT_FULLCHAIN" && as_root test -r "$CERT_PRIVKEY"; then
+        log "Existing TLS certificate found for $NGINX_DOMAIN."
+    else
+        log "TLS certificate for $NGINX_DOMAIN is missing; bootstrapping HTTP for ACME validation."
+        ensure_certbot
+        as_root mkdir -p "$CERTBOT_WEBROOT/.well-known/acme-challenge"
+
+        BOOTSTRAP_TMP="/tmp/casiq-bootstrap.conf.$$"
+        cat > "$BOOTSTRAP_TMP" <<EOF
+server {
+    listen 80;
+    server_name ${NGINX_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CERTBOT_WEBROOT};
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+
+    location / {
+        return 200 'CASIQ certificate bootstrap';
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+        as_root cp "$BOOTSTRAP_TMP" "$NGINX_BOOTSTRAP"
+        rm -f "$BOOTSTRAP_TMP"
+
+        as_root nginx -t || fail "HTTP-only nginx bootstrap configuration is invalid."
+
+        if command -v systemctl >/dev/null 2>&1; then
+            as_root systemctl enable nginx
+            if as_root systemctl is-active --quiet nginx; then
+                as_root systemctl reload nginx
+            else
+                as_root systemctl start nginx
+            fi
+            as_root systemctl is-active --quiet nginx || fail "nginx failed to start on port 80 for certificate bootstrap."
+        else
+            as_root nginx || fail "nginx failed to start on port 80 for certificate bootstrap."
+        fi
+
+        log "Requesting Let's Encrypt certificate for $NGINX_DOMAIN using webroot $CERTBOT_WEBROOT."
+        if [ -n "$CERTBOT_EMAIL" ]; then
+            as_root certbot certonly \
+                --webroot \
+                --webroot-path "$CERTBOT_WEBROOT" \
+                --domain "$NGINX_DOMAIN" \
+                --non-interactive \
+                --agree-tos \
+                --email "$CERTBOT_EMAIL"
+        else
+            warn "CERTBOT_EMAIL is not set; registering with Let's Encrypt without an email address."
+            as_root certbot certonly \
+                --webroot \
+                --webroot-path "$CERTBOT_WEBROOT" \
+                --domain "$NGINX_DOMAIN" \
+                --non-interactive \
+                --agree-tos \
+                --register-unsafely-without-email
+        fi
+
+        as_root test -r "$CERT_FULLCHAIN" || fail "Certificate issuance completed but $CERT_FULLCHAIN is missing."
+        as_root test -r "$CERT_PRIVKEY" || fail "Certificate issuance completed but $CERT_PRIVKEY is missing."
+        log "Certificate files verified for $NGINX_DOMAIN."
+
+        as_root rm -f "$NGINX_BOOTSTRAP"
+    fi
+
+    # The source of truth is ngnix.conf from the repository root. Use the local
+    # repository copy when available; otherwise retrieve that same config.
     NGINX_SOURCE=""
     NGINX_TMP=""
     if [ -r "$NGINX_REPO_CONFIG" ]; then
@@ -253,25 +380,9 @@ ensure_nginx() {
         NGINX_SOURCE="$NGINX_TMP"
     fi
 
-    # Install the repository configuration as a complete nginx server config.
-    # Use conf.d on both Amazon Linux/RHEL and Ubuntu/Debian; nginx packages on
-    # these platforms include /etc/nginx/conf.d/*.conf from nginx.conf.
-    as_root mkdir -p /etc/nginx/conf.d
-    NGINX_TARGET="/etc/nginx/conf.d/casiq.conf"
-
-    if as_root test -r "$NGINX_TARGET" && as_root cmp -s "$NGINX_SOURCE" "$NGINX_TARGET"; then
-        log "nginx configuration is already current: $NGINX_TARGET"
-    else
-        log "Installing nginx configuration from $NGINX_SOURCE to $NGINX_TARGET"
-        as_root cp "$NGINX_SOURCE" "$NGINX_TARGET"
-    fi
-
+    log "Installing nginx configuration from $NGINX_SOURCE to $NGINX_TARGET"
+    as_root cp "$NGINX_SOURCE" "$NGINX_TARGET"
     [ -z "$NGINX_TMP" ] || rm -f "$NGINX_TMP"
-
-    # Remove package defaults that could compete for ports 80/443.
-    if [ "$PACKAGE_FAMILY" = "apt" ]; then
-        as_root rm -f /etc/nginx/sites-enabled/default
-    fi
 
     as_root nginx -t || fail "nginx configuration validation failed. Check $NGINX_TARGET."
 
@@ -283,6 +394,8 @@ ensure_nginx() {
             as_root systemctl start nginx
         fi
         as_root systemctl is-active --quiet nginx || fail "nginx failed to start."
+    else
+        as_root nginx -s reload 2>/dev/null || as_root nginx || fail "nginx failed to reload/start."
     fi
 
     log "nginx setup verified for $NGINX_DOMAIN using $NGINX_TARGET."

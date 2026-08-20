@@ -48,7 +48,8 @@ public interface GmailMailboxClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MessageList(List<MessageReference> messages,
-                       @JsonProperty("nextPageToken") String nextPageToken) {}
+                       @JsonProperty("nextPageToken") String nextPageToken,
+                       @JsonProperty("resultSizeEstimate") Integer resultSizeEstimate) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MessageReference(String id, @JsonProperty("threadId") String threadId) {}
     @JsonIgnoreProperties(ignoreUnknown = true)

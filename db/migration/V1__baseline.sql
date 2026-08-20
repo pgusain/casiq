@@ -509,6 +509,64 @@ VALUES
     ('GOOGLE', 'Google', TRUE, 10),
     ('MICROSOFT', 'Microsoft', TRUE, 20);
 
+INSERT INTO work_account (
+    id,
+    tenant_id,
+    email_id,
+    normalized_email_id,
+    work_item,
+    work_item_definition_id,
+    provider_id,
+    refresh_token,
+    created_at,
+    updated_at
+)
+VALUES (
+    1000,
+    1,
+    'solutions.techvisio@gmail.com',
+    LOWER('solutions.techvisio@gmail.com'),
+    'INCOME_TAX',
+    100,
+    1,
+    '${initial_support_refresh_token}',
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+);
+
+INSERT INTO email_polling_config (
+    id,
+    work_account_id,
+    email_id,
+    provider_id,
+    access_token,
+    access_token_expires_at,
+    next_refresh_at,
+    last_polled_at,
+    locked_until,
+    lock_owner,
+    last_error,
+    consecutive_failures,
+    created_at,
+    updated_at
+)
+VALUES (
+    1000,
+    1000,
+    'solutions.techvisio@gmail.com',
+    1,
+    NULL,
+    NULL,
+    CURRENT_TIMESTAMP,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+);
+
 INSERT INTO work_item_definition (
     id,
     owner_tenant_id,

@@ -30,5 +30,8 @@ replay_pid*
 target/
 **/target/
 casiq-application/data/
+casiq-application/bin/
+.project
+.settings/
 *.iml
 .DS_Store

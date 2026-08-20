@@ -9,9 +9,11 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import org.jboss.logging.Logger;
 
 @RegisterRestClient(configKey = "google-oauth")
 public interface GoogleOAuthClient {
+    Logger LOG = Logger.getLogger(GoogleOAuthClient.class);
     @POST
     @Path("/token")
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)

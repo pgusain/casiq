@@ -17,6 +17,7 @@ import jakarta.persistence.LockModeType;
 import jakarta.transaction.Transactional;
 import org.jboss.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.util.List;
@@ -33,54 +34,57 @@ public class ConversationWorkItemProcessor {
 
     @Transactional
     public void createExecution(Long conversationId, String owner) {
-        LOG.debugf("Creating work-item execution conversationId=%s owner=%s",
-                conversationId, owner);
-        Instant now = Instant.now();
-        @SuppressWarnings("unchecked")
-        List<Object[]> rows = Panache.getEntityManager().createNativeQuery("""
-                SELECT
-                    CAST(conversation.tenant_id AS VARCHAR),
-                    CAST(conversation.work_account_id AS VARCHAR),
-                    account.email_id,
-                    CAST(account.work_item_definition_id AS VARCHAR),
-                    conversation.subject,
-                    conversation.sender,
-                    conversation.recipients,
-                    conversation.sent_at,
-                    conversation.content_html,
-                    conversation.content_text,
-                    conversation.snippet,
-                    conversation.provider_thread_id,
-                    provider.code,
-                    conversation.provider_message_id,
-                    conversation.rfc_message_id,
-                    conversation.in_reply_to,
-                    conversation.reference_ids
-                FROM work_account_conversation conversation
-                JOIN work_account account ON account.id = conversation.work_account_id
-                JOIN email_provider_reference provider ON provider.id = conversation.provider_id
-                WHERE conversation.id = ?1
-                  AND conversation.direction = 'INBOUND'
-                  AND conversation.work_item_processed_at IS NULL
-                  AND conversation.work_item_lock_owner = ?2
-                  AND conversation.work_item_locked_until > ?3
-                FOR UPDATE
-                """)
-                .setParameter(1, conversationId)
-                .setParameter(2, owner)
-                .setParameter(3, now)
-                .getResultList();
-        if (rows.isEmpty()) {
-            throw new IllegalStateException("Conversation work-item lease is missing or expired");
-        }
+        MDC.put("tenantCode", conversationId == null ? "unknown" : String.valueOf(conversationId));
+        try {
+            LOG.debugf("Creating work-item execution conversationId=%s owner=%s",
+                    conversationId, owner);
+            Instant now = Instant.now();
+            @SuppressWarnings("unchecked")
+            List<Object[]> rows = Panache.getEntityManager().createNativeQuery("""
+                    SELECT
+                        CAST(conversation.tenant_id AS VARCHAR),
+                        CAST(conversation.work_account_id AS VARCHAR),
+                        account.email_id,
+                        CAST(account.work_item_definition_id AS VARCHAR),
+                        conversation.subject,
+                        conversation.sender,
+                        conversation.recipients,
+                        conversation.sent_at,
+                        conversation.content_html,
+                        conversation.content_text,
+                        conversation.snippet,
+                        conversation.provider_thread_id,
+                        provider.code,
+                        conversation.provider_message_id,
+                        conversation.rfc_message_id,
+                        conversation.in_reply_to,
+                        conversation.reference_ids
+                    FROM work_account_conversation conversation
+                    JOIN work_account account ON account.id = conversation.work_account_id
+                    JOIN email_provider_reference provider ON provider.id = conversation.provider_id
+                    WHERE conversation.id = ?1
+                      AND conversation.direction = 'INBOUND'
+                      AND conversation.work_item_processed_at IS NULL
+                      AND conversation.work_item_lock_owner = ?2
+                      AND conversation.work_item_locked_until > ?3
+                    FOR UPDATE
+                    """)
+                    .setParameter(1, conversationId)
+                    .setParameter(2, owner)
+                    .setParameter(3, now)
+                    .getResultList();
+            if (rows.isEmpty()) {
+                throw new IllegalStateException("Conversation work-item lease is missing or expired");
+            }
 
-        Object[] source = rows.get(0);
-        Long tenantId = longValue(source[0]);
-        Long workAccountId = longValue(source[1]);
-        String workAccountEmail = String.valueOf(source[2]);
-        Long definitionId = longValue(source[3]);
-        String providerThreadId = nullableString(source[11]);
-        String providerCode = String.valueOf(source[12]);
+            Object[] source = rows.get(0);
+            Long tenantId = longValue(source[0]);
+            Long workAccountId = longValue(source[1]);
+            String workAccountEmail = String.valueOf(source[2]);
+            Long definitionId = longValue(source[3]);
+            String providerThreadId = nullableString(source[11]);
+            String providerCode = String.valueOf(source[12]);
+            MDC.put("tenantCode", tenantId == null ? "unknown" : String.valueOf(tenantId));
 
         // Serialize execution creation for one mailbox. Without this lock, two
         // simultaneously claimed messages from a new provider thread could both
@@ -203,6 +207,12 @@ public class ConversationWorkItemProcessor {
         }
         LOG.infof("Consumed conversation removed conversationId=%s executionId=%s owner=%s",
                 conversationId, executionId, owner);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error creating work-item execution conversationId=%s owner=%s", conversationId, owner, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     private void moveCustomerResponseToReady(

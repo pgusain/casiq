@@ -14,6 +14,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.util.*;
@@ -22,6 +24,7 @@ import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class WorkItemDefinitionService {
+    private static final Logger LOG = Logger.getLogger(WorkItemDefinitionService.class);
     public static final Long CASIQ_TENANT_ID = 1L;
     public static final String AWAITING_FIRST_RESPONSE = "AWAITING_FIRST_RESPONSE";
     public static final String READY_TO_PICK = "READY_TO_PICK";
@@ -40,86 +43,133 @@ public class WorkItemDefinitionService {
 
     @Transactional
     public List<WorkItemDefinitionView> listDefinitions(String token) {
-        globalAdministrator(token);
-        return WorkItemDefinitionEntity.<WorkItemDefinitionEntity>list("order by globalScope desc, ownerTenant.companyCode, type")
-                .stream().map(this::view).toList();
+        ApplicationUserEntity actor = globalAdministrator(token);
+        MDC.put("tenantCode", actor.tenant != null ? actor.tenant.normalizedCompanyCode : "global");
+        try {
+            LOG.debugf("Listing work item definitions actorId=%s", String.valueOf(actor.id));
+            return WorkItemDefinitionEntity.<WorkItemDefinitionEntity>list("order by globalScope desc, ownerTenant.companyCode, type")
+                    .stream().map(this::view).toList();
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error listing work item definitions actorId=%s", String.valueOf(actor.id), e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
     public List<WorkItemDefinitionView> effective(String token, Long requestedTenantId) {
         ApplicationUserEntity actor = authorizedReader(token);
-        Long tenantId = actor.role == UserRole.GLOBAL_ADMIN
-                ? (requestedTenantId == null ? actor.tenant.id : requestedTenantId)
-                : actor.tenant.id;
-        if (actor.role != UserRole.GLOBAL_ADMIN && requestedTenantId != null && !requestedTenantId.equals(actor.tenant.id)) {
-            throw new ForbiddenException("Tenant is outside your scope");
+        MDC.put("tenantCode", requestedTenantId == null ? (actor.tenant != null ? actor.tenant.normalizedCompanyCode : "unknown") : String.valueOf(requestedTenantId));
+        try {
+            LOG.debugf("Loading effective definitions actorId=%s requestedTenantId=%s", String.valueOf(actor.id), String.valueOf(requestedTenantId));
+            Long tenantId = actor.role == UserRole.GLOBAL_ADMIN
+                    ? (requestedTenantId == null ? actor.tenant.id : requestedTenantId)
+                    : actor.tenant.id;
+            if (actor.role != UserRole.GLOBAL_ADMIN && requestedTenantId != null && !requestedTenantId.equals(actor.tenant.id)) {
+                throw new ForbiddenException("Tenant is outside your scope");
+            }
+            requireTenant(tenantId);
+            return effectiveEntities(tenantId).stream().map(this::view).toList();
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error loading effective definitions actorId=%s requestedTenantId=%s", String.valueOf(actor.id), String.valueOf(requestedTenantId), e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        requireTenant(tenantId);
-        return effectiveEntities(tenantId).stream().map(this::view).toList();
     }
 
     @Transactional
     public WorkItemDefinitionView create(String token, DefinitionInput input) {
-        globalAdministrator(token);
-        validate(input);
-        TenantEntity owner = input.globalScope() ? requireTenant(CASIQ_TENANT_ID) : requireTenant(input.tenantId());
-        String normalizedType = normalize(input.type());
-        ensureUnique(owner.id, normalizedType, null);
+        ApplicationUserEntity actor = globalAdministrator(token);
+        MDC.put("tenantCode", input != null && input.tenantId() != null ? String.valueOf(input.tenantId()) : "global");
+        try {
+            LOG.debugf("Creating work item definition actorId=%s type=%s global=%s tenantId=%s", String.valueOf(actor.id), input.type(), input.globalScope(), input.tenantId());
+            validate(input);
+            TenantEntity owner = input.globalScope() ? requireTenant(CASIQ_TENANT_ID) : requireTenant(input.tenantId());
+            String normalizedType = normalize(input.type());
+            ensureUnique(owner.id, normalizedType, null);
 
-        WorkItemDefinitionEntity global = null;
-        if (!input.globalScope()) {
-            global = WorkItemDefinitionEntity.find("globalScope = true and normalizedType = ?1", normalizedType).firstResult();
-            if (global == null) throw new BadRequestException("A CASIQ-wide work item with this type must exist before a tenant override");
+            WorkItemDefinitionEntity global = null;
+            if (!input.globalScope()) {
+                global = WorkItemDefinitionEntity.find("globalScope = true and normalizedType = ?1", normalizedType).firstResult();
+                if (global == null) throw new BadRequestException("A CASIQ-wide work item with this type must exist before a tenant override");
+            }
+            Instant now = Instant.now();
+            WorkItemDefinitionEntity definition = new WorkItemDefinitionEntity();
+            definition.ownerTenant = owner;
+            definition.type = canonical(input.type());
+            definition.normalizedType = normalizedType;
+            definition.displayName = input.displayName().trim();
+            definition.globalScope = input.globalScope();
+            definition.overridesDefinition = global;
+            definition.active = input.active();
+            definition.createdAt = now;
+            definition.updatedAt = now;
+            Panache.getEntityManager().persist(definition);
+            replaceGraph(definition, input);
+            LOG.infof("Created work item definition definitionId=%s ownerTenantId=%s type=%s actorId=%s", definition.id, owner.id, definition.normalizedType, actor.id);
+            return view(definition);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error creating work item definition actorId=%s type=%s", String.valueOf(actor.id), input != null ? input.type() : "unknown", e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        Instant now = Instant.now();
-        WorkItemDefinitionEntity definition = new WorkItemDefinitionEntity();
-        definition.ownerTenant = owner;
-        definition.type = canonical(input.type());
-        definition.normalizedType = normalizedType;
-        definition.displayName = input.displayName().trim();
-        definition.globalScope = input.globalScope();
-        definition.overridesDefinition = global;
-        definition.active = input.active();
-        definition.createdAt = now;
-        definition.updatedAt = now;
-        Panache.getEntityManager().persist(definition);
-        replaceGraph(definition, input);
-        return view(definition);
     }
 
     @Transactional
     public WorkItemDefinitionView update(String token, Long id, DefinitionInput input) {
-        globalAdministrator(token);
-        validate(input);
-        WorkItemDefinitionEntity definition = requireDefinition(id);
-        Long requestedOwner = input.globalScope() ? CASIQ_TENANT_ID : input.tenantId();
-        if (definition.globalScope != input.globalScope() || !definition.ownerTenant.id.equals(requestedOwner)) {
-            throw new BadRequestException("Work item scope and owner tenant cannot be changed");
+        ApplicationUserEntity actor = globalAdministrator(token);
+        MDC.put("tenantCode", input != null && input.tenantId() != null ? String.valueOf(input.tenantId()) : String.valueOf(id));
+        try {
+            LOG.debugf("Updating work item definition actorId=%s definitionId=%s type=%s", String.valueOf(actor.id), String.valueOf(id), input.type());
+            validate(input);
+            WorkItemDefinitionEntity definition = requireDefinition(id);
+            Long requestedOwner = input.globalScope() ? CASIQ_TENANT_ID : input.tenantId();
+            if (definition.globalScope != input.globalScope() || !definition.ownerTenant.id.equals(requestedOwner)) {
+                throw new BadRequestException("Work item scope and owner tenant cannot be changed");
+            }
+            String normalizedType = normalize(input.type());
+            if (!definition.normalizedType.equals(normalizedType)) {
+                throw new BadRequestException("Work item type cannot be changed; create another definition instead");
+            }
+            ensureUnique(definition.ownerTenant.id, normalizedType, id);
+            if (!definition.globalScope) {
+                WorkItemDefinitionEntity global = WorkItemDefinitionEntity.find(
+                        "globalScope = true and normalizedType = ?1", normalizedType).firstResult();
+                if (global == null) throw new BadRequestException("A CASIQ-wide work item with this type must exist");
+                definition.overridesDefinition = global;
+            }
+            definition.type = canonical(input.type());
+            definition.normalizedType = normalizedType;
+            definition.displayName = input.displayName().trim();
+            definition.active = input.active();
+            definition.updatedAt = Instant.now();
+            replaceGraph(definition, input);
+            LOG.infof("Updated work item definition definitionId=%s actorId=%s", definition.id, actor.id);
+            return view(definition);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error updating work item definition actorId=%s definitionId=%s", String.valueOf(actor.id), String.valueOf(id), e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        String normalizedType = normalize(input.type());
-        if (!definition.normalizedType.equals(normalizedType)) {
-            throw new BadRequestException("Work item type cannot be changed; create another definition instead");
-        }
-        ensureUnique(definition.ownerTenant.id, normalizedType, id);
-        if (!definition.globalScope) {
-            WorkItemDefinitionEntity global = WorkItemDefinitionEntity.find(
-                    "globalScope = true and normalizedType = ?1", normalizedType).firstResult();
-            if (global == null) throw new BadRequestException("A CASIQ-wide work item with this type must exist");
-            definition.overridesDefinition = global;
-        }
-        definition.type = canonical(input.type());
-        definition.normalizedType = normalizedType;
-        definition.displayName = input.displayName().trim();
-        definition.active = input.active();
-        definition.updatedAt = Instant.now();
-        replaceGraph(definition, input);
-        return view(definition);
     }
 
     @Transactional
     public WorkItemDefinitionEntity requireEffective(Long definitionId, Long tenantId) {
-        return effectiveEntities(tenantId).stream().filter(item -> item.id.equals(definitionId)).findFirst()
-                .orElseThrow(() -> new BadRequestException("Selected work item is not available to this tenant"));
+        MDC.put("tenantCode", String.valueOf(tenantId));
+        try {
+            LOG.debugf("Resolving effective definition definitionId=%s tenantId=%s", String.valueOf(definitionId), String.valueOf(tenantId));
+            return effectiveEntities(tenantId).stream().filter(item -> item.id.equals(definitionId)).findFirst()
+                    .orElseThrow(() -> new BadRequestException("Selected work item is not available to this tenant"));
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error resolving effective definition definitionId=%s tenantId=%s", String.valueOf(definitionId), String.valueOf(tenantId), e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     private List<WorkItemDefinitionEntity> effectiveEntities(Long tenantId) {

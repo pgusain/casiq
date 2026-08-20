@@ -1,5 +1,7 @@
 package com.casiq.workitem.service;
 
+import org.jboss.logging.Logger;
+
 import java.time.Instant;
 
 /**
@@ -7,6 +9,8 @@ import java.time.Instant;
  * checks the materialized conversation first and uses the provider as fallback.
  */
 public interface WorkItemEmailContentResolver {
+    Logger LOG = Logger.getLogger(WorkItemEmailContentResolver.class);
+
     ResolvedContent resolve(EmailReference reference);
 
     record EmailReference(

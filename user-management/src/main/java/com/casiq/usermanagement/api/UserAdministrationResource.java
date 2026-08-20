@@ -18,11 +18,14 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
 import java.util.List;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 @Path("/api/v1/users")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class UserAdministrationResource {
+    private static final Logger LOG = Logger.getLogger(UserAdministrationResource.class);
     @Inject UserAdministrationService users;
 
     @GET
@@ -34,9 +37,15 @@ public class UserAdministrationResource {
     public UserView create(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @Valid @NotNull CreateUserRequest request) {
-        return users.create(token, request.companyCode(), request.username(),
-                request.firstName(), request.lastName(),
-                request.temporaryPassword(), request.role());
+        MDC.put("tenantCode", request.companyCode());
+        try {
+            LOG.debugf("Entering create companyCode=%s username=%s", request.companyCode(), request.username());
+            return users.create(token, request.companyCode(), request.username(),
+                    request.firstName(), request.lastName(),
+                    request.temporaryPassword(), request.role());
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @PUT

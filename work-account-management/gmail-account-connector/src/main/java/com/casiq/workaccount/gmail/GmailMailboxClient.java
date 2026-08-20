@@ -6,10 +6,13 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import org.jboss.logging.Logger;
+
 import java.util.List;
 
 @RegisterRestClient(configKey = "gmail-mailbox")
 public interface GmailMailboxClient {
+    Logger LOG = Logger.getLogger(GmailMailboxClient.class);
     @GET
     @Path("/gmail/v1/users/me/messages")
     @Produces(MediaType.APPLICATION_JSON)
@@ -45,7 +48,8 @@ public interface GmailMailboxClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MessageList(List<MessageReference> messages,
-                       @JsonProperty("nextPageToken") String nextPageToken) {}
+                       @JsonProperty("nextPageToken") String nextPageToken,
+                       @JsonProperty("resultSizeEstimate") Integer resultSizeEstimate) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MessageReference(String id, @JsonProperty("threadId") String threadId) {}
     @JsonIgnoreProperties(ignoreUnknown = true)

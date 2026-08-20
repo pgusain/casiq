@@ -44,6 +44,11 @@
     </dependency>
     <dependency>
       <groupId>com.casiq</groupId>
+      <artifactId>alert-reconciliation</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.casiq</groupId>
       <artifactId>user-experience</artifactId>
       <version>${project.version}</version>
     </dependency>

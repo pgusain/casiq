@@ -14,12 +14,14 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.List;
 
 @RegisterRestClient(configKey = "microsoft-graph")
 public interface MicrosoftGraphClient {
+    Logger LOG = Logger.getLogger(MicrosoftGraphClient.class);
     @GET
     @Path("/v1.0/me")
     @Produces(MediaType.APPLICATION_JSON)

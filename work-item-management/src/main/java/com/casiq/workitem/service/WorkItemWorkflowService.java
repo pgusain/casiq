@@ -18,6 +18,7 @@ import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
 import org.jboss.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -86,78 +87,106 @@ public class WorkItemWorkflowService {
     @Transactional
     public List<WorkItemWorkflowView.Assignment> listAssignments(String token, Long requestedTenantId) {
         ApplicationUserEntity actor = administrator(token);
-        TenantEntity tenant = targetTenant(actor, requestedTenantId);
-        List<WorkItemWorkflowView.Assignment> result = new ArrayList<>();
-        WorkItemStatusAssignmentEntity.<WorkItemStatusAssignmentEntity>list(
-                "tenant.id = ?1 order by definition.type, status.sortOrder, user.username", tenant.id)
-                .forEach(a -> result.add(statusAssignmentView(a)));
-        WorkItemTransitionAssignmentEntity.<WorkItemTransitionAssignmentEntity>list(
-                "tenant.id = ?1 order by definition.type, transition.label, user.username", tenant.id)
-                .forEach(a -> result.add(transitionAssignmentView(a)));
-        return result;
+        MDC.put("tenantCode", requestedTenantId == null ? String.valueOf(actor.tenant.id) : String.valueOf(requestedTenantId));
+        try {
+            LOG.debugf("Listing work-item assignments actorId=%s requestedTenantId=%s", String.valueOf(actor.id), requestedTenantId);
+            TenantEntity tenant = targetTenant(actor, requestedTenantId);
+            List<WorkItemWorkflowView.Assignment> result = new ArrayList<>();
+            WorkItemStatusAssignmentEntity.<WorkItemStatusAssignmentEntity>list(
+                    "tenant.id = ?1 order by definition.type, status.sortOrder, user.username", tenant.id)
+                    .forEach(a -> result.add(statusAssignmentView(a)));
+            WorkItemTransitionAssignmentEntity.<WorkItemTransitionAssignmentEntity>list(
+                    "tenant.id = ?1 order by definition.type, transition.label, user.username", tenant.id)
+                    .forEach(a -> result.add(transitionAssignmentView(a)));
+            return result;
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error listing work-item assignments actorId=%s requestedTenantId=%s", String.valueOf(actor.id), requestedTenantId, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
     public WorkItemWorkflowView.Assignment assign(String token, AssignmentInput input) {
         ApplicationUserEntity actor = administrator(token);
-        TenantEntity tenant = targetTenant(actor, input.tenantId());
-        if ((input.statusId() == null) == (input.transitionId() == null)) {
-            throw new BadRequestException("Assign exactly one status or transition");
-        }
-        WorkItemDefinitionEntity definition = definitions.requireEffective(input.definitionId(), tenant.id);
-        ApplicationUserEntity user = ApplicationUserEntity.findById(input.userId());
-        if (user == null || !user.active) throw new NotFoundException("Active user not found");
-        user.tenant = TenantEntity.findById(user.tenant.id);
-        if (!user.tenant.id.equals(tenant.id)) throw new BadRequestException("Assigned user must belong to the selected tenant");
-        Instant now = Instant.now();
-
-        if (input.statusId() != null) {
-            WorkItemStatusEntity status = WorkItemStatusEntity.findById(input.statusId());
-            requireStatusDefinition(status, definition.id);
-            if (WorkItemStatusAssignmentEntity.count(
-                    "tenant.id = ?1 and status.id = ?2 and user.id = ?3", tenant.id, status.id, user.id) > 0) {
-                throw new WebApplicationException("Status is already assigned to this user", 409);
+        MDC.put("tenantCode", input != null && input.tenantId() != null ? String.valueOf(input.tenantId()) : "unknown");
+        try {
+            LOG.debugf("Assigning work item actorId=%s tenantId=%s definitionId=%s statusId=%s transitionId=%s userId=%s",
+                    String.valueOf(actor.id), input.tenantId(), input.definitionId(), input.statusId(), input.transitionId(), input.userId());
+            TenantEntity tenant = targetTenant(actor, input.tenantId());
+            if ((input.statusId() == null) == (input.transitionId() == null)) {
+                throw new BadRequestException("Assign exactly one status or transition");
             }
-            WorkItemStatusAssignmentEntity assignment = new WorkItemStatusAssignmentEntity();
-            assignment.tenant = tenant; assignment.definition = definition; assignment.status = status;
+            WorkItemDefinitionEntity definition = definitions.requireEffective(input.definitionId(), tenant.id);
+            ApplicationUserEntity user = ApplicationUserEntity.findById(input.userId());
+            if (user == null || !user.active) throw new NotFoundException("Active user not found");
+            user.tenant = TenantEntity.findById(user.tenant.id);
+            if (!user.tenant.id.equals(tenant.id)) throw new BadRequestException("Assigned user must belong to the selected tenant");
+            Instant now = Instant.now();
+
+            if (input.statusId() != null) {
+                WorkItemStatusEntity status = WorkItemStatusEntity.findById(input.statusId());
+                requireStatusDefinition(status, definition.id);
+                if (WorkItemStatusAssignmentEntity.count(
+                        "tenant.id = ?1 and status.id = ?2 and user.id = ?3", tenant.id, status.id, user.id) > 0) {
+                    throw new WebApplicationException("Status is already assigned to this user", 409);
+                }
+                WorkItemStatusAssignmentEntity assignment = new WorkItemStatusAssignmentEntity();
+                assignment.tenant = tenant; assignment.definition = definition; assignment.status = status;
+                assignment.user = user; assignment.createdBy = actor; assignment.createdAt = now;
+                Panache.getEntityManager().persist(assignment);
+                LOG.infof("Created work-item status assignment tenantId=%s definitionId=%s statusId=%s userId=%s actorId=%s",
+                        tenant.id, definition.id, status.id, user.id, actor.id);
+                return statusAssignmentView(assignment);
+            }
+
+            WorkItemTransitionEntity transition = WorkItemTransitionEntity.findById(input.transitionId());
+            requireTransitionDefinition(transition, definition.id);
+            if (WorkItemTransitionAssignmentEntity.count(
+                    "tenant.id = ?1 and transition.id = ?2 and user.id = ?3", tenant.id, transition.id, user.id) > 0) {
+                throw new WebApplicationException("Transition is already assigned to this user", 409);
+            }
+            WorkItemTransitionAssignmentEntity assignment = new WorkItemTransitionAssignmentEntity();
+            assignment.tenant = tenant; assignment.definition = definition; assignment.transition = transition;
             assignment.user = user; assignment.createdBy = actor; assignment.createdAt = now;
             Panache.getEntityManager().persist(assignment);
-            LOG.infof("Created work-item status assignment tenantId=%s definitionId=%s statusId=%s userId=%s actorId=%s",
-                    tenant.id, definition.id, status.id, user.id, actor.id);
-            return statusAssignmentView(assignment);
+            LOG.infof("Created work-item transition assignment tenantId=%s definitionId=%s transitionId=%s userId=%s actorId=%s",
+                    tenant.id, definition.id, transition.id, user.id, actor.id);
+            return transitionAssignmentView(assignment);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error assigning work item actorId=%s tenantId=%s definitionId=%s userId=%s", String.valueOf(actor.id), input != null ? input.tenantId() : null, input != null ? input.definitionId() : null, input != null ? input.userId() : null, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-
-        WorkItemTransitionEntity transition = WorkItemTransitionEntity.findById(input.transitionId());
-        requireTransitionDefinition(transition, definition.id);
-        if (WorkItemTransitionAssignmentEntity.count(
-                "tenant.id = ?1 and transition.id = ?2 and user.id = ?3", tenant.id, transition.id, user.id) > 0) {
-            throw new WebApplicationException("Transition is already assigned to this user", 409);
-        }
-        WorkItemTransitionAssignmentEntity assignment = new WorkItemTransitionAssignmentEntity();
-        assignment.tenant = tenant; assignment.definition = definition; assignment.transition = transition;
-        assignment.user = user; assignment.createdBy = actor; assignment.createdAt = now;
-        Panache.getEntityManager().persist(assignment);
-        LOG.infof("Created work-item transition assignment tenantId=%s definitionId=%s transitionId=%s userId=%s actorId=%s",
-                tenant.id, definition.id, transition.id, user.id, actor.id);
-        return transitionAssignmentView(assignment);
     }
 
     @Transactional
     public void removeAssignment(String token, String type, Long id) {
         ApplicationUserEntity actor = administrator(token);
-        if ("STATUS".equalsIgnoreCase(type)) {
-            WorkItemStatusAssignmentEntity assignment = WorkItemStatusAssignmentEntity.findById(id);
-            if (assignment == null) throw new NotFoundException("Assignment not found");
-            assertTenant(actor, assignment.tenant.id);
-            assignment.delete();
-            LOG.infof("Removed work-item status assignment assignmentId=%s actorId=%s", id, actor.id);
-        } else if ("TRANSITION".equalsIgnoreCase(type)) {
-            WorkItemTransitionAssignmentEntity assignment = WorkItemTransitionAssignmentEntity.findById(id);
-            if (assignment == null) throw new NotFoundException("Assignment not found");
-            assertTenant(actor, assignment.tenant.id);
-            assignment.delete();
-            LOG.infof("Removed work-item transition assignment assignmentId=%s actorId=%s", id, actor.id);
-        } else throw new BadRequestException("Assignment type must be STATUS or TRANSITION");
+        MDC.put("tenantCode", String.valueOf(actor.tenant.id));
+        try {
+            LOG.debugf("Removing assignment actorId=%s type=%s assignmentId=%s", String.valueOf(actor.id), type, id);
+            if ("STATUS".equalsIgnoreCase(type)) {
+                WorkItemStatusAssignmentEntity assignment = WorkItemStatusAssignmentEntity.findById(id);
+                if (assignment == null) throw new NotFoundException("Assignment not found");
+                assertTenant(actor, assignment.tenant.id);
+                assignment.delete();
+                LOG.infof("Removed work-item status assignment assignmentId=%s actorId=%s", id, actor.id);
+            } else if ("TRANSITION".equalsIgnoreCase(type)) {
+                WorkItemTransitionAssignmentEntity assignment = WorkItemTransitionAssignmentEntity.findById(id);
+                if (assignment == null) throw new NotFoundException("Assignment not found");
+                assertTenant(actor, assignment.tenant.id);
+                assignment.delete();
+                LOG.infof("Removed work-item transition assignment assignmentId=%s actorId=%s", id, actor.id);
+            } else throw new BadRequestException("Assignment type must be STATUS or TRANSITION");
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error removing assignment actorId=%s type=%s assignmentId=%s", String.valueOf(actor.id), type, id, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
@@ -173,7 +202,10 @@ public class WorkItemWorkflowService {
             String requestedSortBy,
             String requestedSortDirection) {
         ApplicationUserEntity actor = authenticated(token);
-        int page = Math.max(0, requestedPage);
+        MDC.put("tenantCode", String.valueOf(actor.tenant.id));
+        try {
+            LOG.debugf("Loading myWork actorId=%s queueScope=%s includeTerminal=%s requestedPage=%s requestedSize=%s", String.valueOf(actor.id), queueScope, includeTerminal, requestedPage, requestedSize);
+            int page = Math.max(0, requestedPage);
         int size = Math.max(1, Math.min(requestedSize, 100));
         String sortBy = sortBy(requestedSortBy);
         String sortDirection = sortDirection(requestedSortDirection);
@@ -217,8 +249,14 @@ public class WorkItemWorkflowService {
                 actor.id, actor.tenant.id, executions.size(), visible.size(), items.size(),
                 page, size, sortBy, sortDirection,
                 workItemType, status, hasText(email), includeTerminal);
-        return new WorkItemWorkflowView.WorkPage(
-                items, page, size, total, totalPages, sortBy, sortDirection);
+            return new WorkItemWorkflowView.WorkPage(
+                    items, page, size, total, totalPages, sortBy, sortDirection);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error loading myWork actorId=%s tenantId=%s", actor.id, actor.tenant.id, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
@@ -229,70 +267,89 @@ public class WorkItemWorkflowService {
             String email,
             boolean includeTerminal) {
         ApplicationUserEntity actor = authenticated(token);
-        StringBuilder query = new StringBuilder("tenant.id = :tenantId");
-        Map<String, Object> parameters = new HashMap<>();
-        parameters.put("tenantId", actor.tenant.id);
-        appendQueueScope(query, parameters, queueScope, actor.id);
-        if (!includeTerminal) query.append(" and currentStatus.terminalStatus = false");
-        if (hasText(workItemType)) {
-            query.append(" and definition.normalizedType = :workItemType");
-            parameters.put("workItemType", normalize(workItemType));
+        MDC.put("tenantCode", String.valueOf(actor.tenant.id));
+        try {
+            LOG.debugf("Summarizing user work actorId=%s tenantId=%s queueScope=%s type=%s emailFilter=%s includeTerminal=%s",
+                    actor.id, actor.tenant.id, queueScope, workItemType, hasText(email), includeTerminal);
+            StringBuilder query = new StringBuilder("tenant.id = :tenantId");
+            Map<String, Object> parameters = new HashMap<>();
+            parameters.put("tenantId", actor.tenant.id);
+            appendQueueScope(query, parameters, queueScope, actor.id);
+            if (!includeTerminal) query.append(" and currentStatus.terminalStatus = false");
+            if (hasText(workItemType)) {
+                query.append(" and definition.normalizedType = :workItemType");
+                parameters.put("workItemType", normalize(workItemType));
+            }
+            if (hasText(email)) {
+                query.append(" and workAccountNormalizedEmail like :email");
+                parameters.put("email", normalize(email) + "%");
+            }
+            List<WorkItemExecutionEntity> executions =
+                    WorkItemExecutionEntity.list(query.toString(), parameters);
+            Map<String, WorkItemWorkflowView.StatusCount> counts = new TreeMap<>();
+            executions.stream()
+                    .filter(execution -> visibleInQueue(
+                            execution, actor, includeTerminal, queueScope))
+                    .forEach(execution -> {
+                        WorkItemStatusEntity status = execution.currentStatus;
+                        counts.compute(status.code, (code, current) ->
+                                new WorkItemWorkflowView.StatusCount(
+                                        code,
+                                        status.displayName,
+                                        status.terminalStatus,
+                                        current == null ? 1 : current.count() + 1));
+                    });
+            LOG.debugf("Summarized user work actorId=%s tenantId=%s statuses=%d type=%s emailFilter=%s includeTerminal=%s",
+                    actor.id, actor.tenant.id, counts.size(), workItemType,
+                    hasText(email), includeTerminal);
+            return List.copyOf(counts.values());
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error summarizing myWork actorId=%s tenantId=%s", actor.id, actor.tenant.id, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        if (hasText(email)) {
-            query.append(" and workAccountNormalizedEmail like :email");
-            parameters.put("email", normalize(email) + "%");
-        }
-        List<WorkItemExecutionEntity> executions =
-                WorkItemExecutionEntity.list(query.toString(), parameters);
-        Map<String, WorkItemWorkflowView.StatusCount> counts = new TreeMap<>();
-        executions.stream()
-                .filter(execution -> visibleInQueue(
-                        execution, actor, includeTerminal, queueScope))
-                .forEach(execution -> {
-                    WorkItemStatusEntity status = execution.currentStatus;
-                    counts.compute(status.code, (code, current) ->
-                            new WorkItemWorkflowView.StatusCount(
-                                    code,
-                                    status.displayName,
-                                    status.terminalStatus,
-                                    current == null ? 1 : current.count() + 1));
-                });
-        LOG.debugf("Summarized user work actorId=%s tenantId=%s statuses=%d type=%s emailFilter=%s includeTerminal=%s",
-                actor.id, actor.tenant.id, counts.size(), workItemType,
-                hasText(email), includeTerminal);
-        return List.copyOf(counts.values());
     }
 
     @Transactional
     public WorkItemWorkflowView.Detail detail(String token, Long executionId) {
         ApplicationUserEntity actor = authenticated(token);
-        WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
-        if (execution.dataMigrated) {
-            WorkItemWorkflowView.Detail archived =
-                    archivedDetail(execution, actor);
-            LOG.infof(
-                    "Opened archived work-item detail executionId=%s archiveKey=%s actorId=%s",
-                    execution.id, execution.archiveStorageKey, actor.id);
-            return archived;
+        MDC.put("tenantCode", String.valueOf(actor.tenant.id));
+        try {
+            LOG.debugf("Opening work-item detail actorId=%s executionId=%s", actor.id, executionId);
+            WorkItemExecutionEntity execution = accessibleExecution(actor, executionId);
+            if (execution.dataMigrated) {
+                WorkItemWorkflowView.Detail archived =
+                        archivedDetail(execution, actor);
+                LOG.infof(
+                        "Opened archived work-item detail executionId=%s archiveKey=%s actorId=%s",
+                        execution.id, execution.archiveStorageKey, actor.id);
+                return archived;
+            }
+            LOG.infof("Opened work-item detail executionId=%s conversationId=%s actorId=%s",
+                    execution.id, execution.initialCommunicationId, actor.id);
+            List<WorkItemWorkflowView.Conversation> communications =
+                    communications(execution);
+            WorkItemWorkflowView.Conversation initial = communications.stream()
+                    .filter(communication -> Objects.equals(
+                            communication.id(), execution.initialCommunicationId))
+                    .findFirst()
+                    .orElse(communications.isEmpty() ? null : communications.get(0));
+            return new WorkItemWorkflowView.Detail(
+                    executionView(execution, actor),
+                    initial,
+                    communications,
+                    documents(execution),
+                    internalNotes(execution),
+                    execution.currentStatus.terminalStatus
+                            || execution.assignedUser != null
+                            && !execution.assignedUser.id.equals(actor.id));
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error opening work-item detail actorId=%s executionId=%s", actor.id, executionId, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        LOG.infof("Opened work-item detail executionId=%s conversationId=%s actorId=%s",
-                execution.id, execution.initialCommunicationId, actor.id);
-        List<WorkItemWorkflowView.Conversation> communications =
-                communications(execution);
-        WorkItemWorkflowView.Conversation initial = communications.stream()
-                .filter(communication -> Objects.equals(
-                        communication.id(), execution.initialCommunicationId))
-                .findFirst()
-                .orElse(communications.isEmpty() ? null : communications.get(0));
-        return new WorkItemWorkflowView.Detail(
-                executionView(execution, actor),
-                initial,
-                communications,
-                documents(execution),
-                internalNotes(execution),
-                execution.currentStatus.terminalStatus
-                        || execution.assignedUser != null
-                        && !execution.assignedUser.id.equals(actor.id));
     }
 
     @Transactional

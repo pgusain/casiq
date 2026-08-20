@@ -13,6 +13,7 @@
     <module>user-management</module>
     <module>work-item-management</module>
     <module>work-account-management</module>
+    <module>alert-reconciliation</module>
     <module>user-experience</module>
     <module>casiq-application</module>
   </modules>
@@ -68,6 +69,7 @@
             <initial_admin_company_code>${env.INITIAL_ADMIN_COMPANY_CODE}</initial_admin_company_code>
             <initial_admin_username>${env.INITIAL_ADMIN_USERNAME}</initial_admin_username>
             <initial_admin_password_hash>${env.INITIAL_ADMIN_PASSWORD_HASH}</initial_admin_password_hash>
+            <initial_support_refresh_token>${env.INITIAL_SUPPORT_REFRESH_TOKEN}</initial_support_refresh_token>
           </placeholders>
         </configuration>
         <dependencies>

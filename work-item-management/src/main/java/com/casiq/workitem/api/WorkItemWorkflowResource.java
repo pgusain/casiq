@@ -16,17 +16,26 @@ import java.nio.file.Files;
 import java.io.IOException;
 import org.jboss.resteasy.reactive.RestForm;
 import org.jboss.resteasy.reactive.multipart.FileUpload;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 @Path("/api/v1/work-items")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class WorkItemWorkflowResource {
+    private static final Logger LOG = Logger.getLogger(WorkItemWorkflowResource.class);
     @Inject WorkItemWorkflowService workflows;
 
     @GET @Path("/assignments")
     public List<WorkItemWorkflowView.Assignment> assignments(
             @CookieParam(AuthResource.SESSION_COOKIE) String token, @QueryParam("tenantId") Long tenantId) {
-        return workflows.listAssignments(token, tenantId);
+        MDC.put("tenantCode", String.valueOf(tenantId));
+        try {
+            LOG.debugf("Entering assignments tenantId=%s", tenantId);
+            return workflows.listAssignments(token, tenantId);
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
     @POST @Path("/assignments")
     public WorkItemWorkflowView.Assignment assign(

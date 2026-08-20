@@ -1,5 +1,7 @@
 package com.casiq.workitem.conversation;
 
+import org.jboss.logging.Logger;
+
 import java.util.Optional;
 
 /**
@@ -7,6 +9,8 @@ import java.util.Optional;
  * The work-item module owns persistence; provider connectors own identifier semantics.
  */
 public interface ConversationWorkItemMatcher {
+    Logger LOG = Logger.getLogger(ConversationWorkItemMatcher.class);
+
     String providerCode();
 
     Optional<Long> matchingExecution(

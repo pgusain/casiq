@@ -3,7 +3,7 @@ package com.casiq.workaccount.core.polling;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
-
+import org.slf4j.MDC;
 
 @ApplicationScoped
 public class EmailPollingWorker {
@@ -12,13 +12,16 @@ public class EmailPollingWorker {
     @Inject EmailPollingStateService state;
 
     public void process(Long configId, String owner) {
-        LOG.debugf("Email polling worker started configId=%s owner=%s", configId, owner);
+        MDC.put("tenantCode", configId == null ? "unknown" : String.valueOf(configId));
         try {
+            LOG.debugf("Email polling worker started configId=%s owner=%s", configId, owner);
             processor.poll(configId, owner);
             LOG.debugf("Email polling worker finished configId=%s owner=%s", configId, owner);
         } catch (RuntimeException failure) {
             LOG.warnf(failure, "Email polling worker failed configId=%s owner=%s", configId, owner);
             state.fail(configId, owner, failure);
+        } finally {
+            MDC.remove("tenantCode");
         }
     }
 }

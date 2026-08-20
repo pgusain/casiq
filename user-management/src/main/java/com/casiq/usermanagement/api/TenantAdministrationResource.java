@@ -18,11 +18,14 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
 import java.util.List;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 @Path("/api/v1/tenants")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class TenantAdministrationResource {
+    private static final Logger LOG = Logger.getLogger(TenantAdministrationResource.class);
     @Inject TenantAdministrationService tenants;
 
     @GET
@@ -34,7 +37,13 @@ public class TenantAdministrationResource {
     public TenantView create(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @Valid @NotNull TenantRequest request) {
-        return tenants.create(token, request.companyCode(), request.displayName(), request.active());
+        MDC.put("tenantCode", request.companyCode());
+        try {
+            LOG.debugf("Entering create companyCode=%s", request.companyCode());
+            return tenants.create(token, request.companyCode(), request.displayName(), request.active());
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @PUT
@@ -43,7 +52,13 @@ public class TenantAdministrationResource {
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @PathParam("id") Long id,
             @Valid @NotNull TenantRequest request) {
-        return tenants.update(token, id, request.companyCode(), request.displayName(), request.active());
+        MDC.put("tenantCode", request.companyCode());
+        try {
+            LOG.debugf("Entering update id=%s companyCode=%s", id, request.companyCode());
+            return tenants.update(token, id, request.companyCode(), request.displayName(), request.active());
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     public record TenantRequest(

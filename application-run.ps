@@ -1,0 +1,173 @@
+<#
+PowerShell deployment helper (application-run.ps)
+
+Adapted from .github/scripts/deploy-ec2.sh for Windows/PowerShell usage.
+
+Usage (PowerShell):
+  Set the required environment variables (or pass them in the current session) then run:
+    .\application-run.ps
+
+Required environment variables:
+  IMAGE_REF            - Local image tag to build (e.g. casiq-app:local)
+  APP_ENV_FILE         - Path to the application env file (docker compose env file)
+  ENVIRONMENT          - Logical environment name (e.g., development, production)
+
+Optional environment variables (defaults shown):
+  CONTAINER_NAME       - casiq-app
+  APP_PORT             - 8080
+  COMPOSE_FILE         - .\docker-compose.yml
+
+Notes:
+  - Requires Docker Desktop (docker CLI + docker compose plugin) available in PATH.
+  - For local runs, SSM is not used. Ensure the APP_ENV_FILE or POSTGRES_PASSWORD env var provides the DB password.
+#>
+
+# stop on errors
+$ErrorActionPreference = 'Stop'
+
+function Fail([string]$msg) {
+    Write-Error "[deploy] ERROR: $msg"
+    exit 1
+}
+
+function Log([string]$msg) {
+    Write-Host "[deploy] $msg"
+}
+
+# --- Required inputs ---
+$IMAGE_REF = $env:IMAGE_REF
+$APP_ENV_FILE = $env:APP_ENV_FILE
+$ENVIRONMENT = $env:ENVIRONMENT
+
+if (-not $IMAGE_REF) { Fail "IMAGE_REF is required (local image tag to build, e.g. casiq-app:local)" }
+if (-not $APP_ENV_FILE) { Fail "APP_ENV_FILE is required" }
+if (-not $ENVIRONMENT) { Fail "ENVIRONMENT is required" }
+
+# --- Optional defaults ---
+$CONTAINER_NAME = $env:CONTAINER_NAME; if (-not $CONTAINER_NAME) { $CONTAINER_NAME = 'casiq-app' }
+$APP_PORT = $env:APP_PORT; if (-not $APP_PORT) { $APP_PORT = 8080 }
+$COMPOSE_FILE = $env:COMPOSE_FILE; if (-not $COMPOSE_FILE) { $COMPOSE_FILE = '.\docker-compose.yml' }
+# SSM parameter is not used for local runs; provide DB password via APP_ENV_FILE or POSTGRES_PASSWORD env var
+
+# Helper: check command available
+function CommandExists([string]$cmd) {
+    try {
+        $null = & $cmd --version 2>$null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Ensure Docker is available
+if (-not (CommandExists 'docker')) {
+    Fail 'Docker CLI is not available in PATH. Install Docker Desktop and ensure docker is on PATH.'
+}
+
+# Check docker daemon reachable
+try {
+    docker info > $null 2>&1
+} catch {
+    Fail 'Docker daemon is not reachable. Start Docker Desktop or ensure Docker is running.'
+}
+
+# Capture currently deployed image for rollback (if container exists)
+$previous_image = $null
+try {
+    $inspect = docker inspect --format '{{.Config.Image}}' $CONTAINER_NAME 2>$null
+    if ($LASTEXITCODE -eq 0 -and $inspect) { $previous_image = $inspect.Trim() }
+} catch {
+    # ignore
+}
+
+# For local runs, SSM is not used. Ensure APP_ENV_FILE or environment provides the DB password (POSTGRES_PASSWORD).
+
+# Validate files
+if (-not (Test-Path -Path $APP_ENV_FILE -PathType Leaf)) { Fail "Application env file is not readable: $APP_ENV_FILE" }
+if (-not (Test-Path -Path $COMPOSE_FILE -PathType Leaf)) { Fail "Docker Compose file is not readable: $COMPOSE_FILE" }
+
+# Local build: build the application image from the repository Dockerfile and tag it as IMAGE_REF
+Log "Building local Docker image: $IMAGE_REF"
+try {
+    docker build -t $IMAGE_REF . | Write-Host
+} catch {
+    Fail "Docker build failed for image: $IMAGE_REF"
+}
+
+# Set IMAGE_REF in process env so docker compose can see it via environment
+$env:IMAGE_REF = $IMAGE_REF
+$env:APP_PORT = [string]$APP_PORT
+
+# Start stack via docker compose
+function Compose(@args) {
+    $all = @('compose', '--file', $COMPOSE_FILE, '--env-file', $APP_ENV_FILE) + $args
+    docker @all
+}
+
+Log "Starting application stack via compose"
+try {
+    Compose('up','--detach','--remove-orphans') | Write-Host
+} catch {
+    Fail 'Docker Compose failed to start the application stack.'
+}
+
+# Wait until healthy
+function Wait-UntilHealthy([int]$maxAttempts=30, [int]$delaySeconds=2) {
+    for ($i=0; $i -lt $maxAttempts; $i++) {
+        try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$APP_PORT/" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+            if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400) { return $true }
+        } catch {
+            # still starting
+        }
+        Start-Sleep -Seconds $delaySeconds
+    }
+    return $false
+}
+
+Log 'Waiting for application health check on http://127.0.0.1:' + $APP_PORT
+$healthy = Wait-UntilHealthy
+if (-not $healthy) {
+    Write-Warning '[deploy] Deployment health check failed.'
+    try {
+        Compose('logs','--tail','200',$CONTAINER_NAME) | Write-Host
+    } catch {
+        Write-Warning 'Failed to collect compose logs.'
+    }
+
+    if ($previous_image -and $previous_image -ne $IMAGE_REF) {
+        Write-Warning "Rolling back to previous image: $previous_image"
+        $env:IMAGE_REF = $previous_image
+        try {
+            Compose('up','--detach','--remove-orphans') | Write-Host
+            if (Wait-UntilHealthy) {
+                Log "Rollback to $previous_image succeeded."
+            } else {
+                Write-Warning 'Rollback health check also failed.'
+                try { Compose('logs','--tail','200',$CONTAINER_NAME) | Write-Host } catch {}
+            }
+        } catch {
+            Write-Warning 'Failed to start stack during rollback.'
+        }
+    } else {
+        Write-Warning 'No previous application image available for rollback.'
+    }
+
+    # Unset sensitive environment
+    Remove-Item Env:POSTGRES_PASSWORD -ErrorAction SilentlyContinue
+    exit 1
+}
+
+# Cleanup image prune (best-effort)
+try {
+    docker image prune --force > $null 2>&1
+} catch {
+    # ignore
+}
+
+Remove-Item Env:POSTGRES_PASSWORD -ErrorAction SilentlyContinue
+
+Log "Deployed $IMAGE_REF as $CONTAINER_NAME on application port $APP_PORT"
+Log "Environment: $ENVIRONMENT"
+
+exit 0

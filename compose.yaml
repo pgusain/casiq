@@ -38,6 +38,8 @@ services:
 
     volumes:
       - "${ATTACHMENT_DATA_DIR:-/opt/casiq/data/attachments}:/work/data/attachments"
+      - "${LOG_DIR:-/opt/casiq/logs}:/opt/casiq/logs:rw"
+      - "/opt/casiq/config:/opt/casiq/config:ro"
 
     depends_on:
       postgres:

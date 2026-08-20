@@ -1,5 +1,7 @@
 package com.casiq.workaccount.core.polling;
 
+import org.jboss.logging.Logger;
+
 import java.time.Instant;
 import java.util.List;
 
@@ -8,6 +10,8 @@ import java.util.List;
  * this contract without owning scheduling, database locking, or persistence.
  */
 public interface EmailProviderConnector {
+    Logger LOG = Logger.getLogger(EmailProviderConnector.class);
+
     String providerCode();
 
     PollResult fetch(PollRequest request);

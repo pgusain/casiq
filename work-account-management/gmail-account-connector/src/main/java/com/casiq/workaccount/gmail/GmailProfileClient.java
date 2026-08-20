@@ -9,9 +9,11 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import org.jboss.logging.Logger;
 
 @RegisterRestClient(configKey = "gmail-profile")
 public interface GmailProfileClient {
+    Logger LOG = Logger.getLogger(GmailProfileClient.class);
     @GET
     @Path("/gmail/v1/users/me/profile")
     @Produces(MediaType.APPLICATION_JSON)

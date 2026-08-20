@@ -1,6 +1,10 @@
 package com.casiq.storage;
 
+import org.jboss.logging.Logger;
+
 public interface AttachmentStorage {
+    Logger LOG = Logger.getLogger(AttachmentStorage.class);
+
     StoredObject put(
             Long tenantId,
             String category,

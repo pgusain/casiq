@@ -10,9 +10,11 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import org.jboss.logging.Logger;
 
 @RegisterRestClient(configKey = "microsoft-oauth")
 public interface MicrosoftOAuthClient {
+    Logger LOG = Logger.getLogger(MicrosoftOAuthClient.class);
     @POST
     @Path("/{tenant}/oauth2/v2.0/token")
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)

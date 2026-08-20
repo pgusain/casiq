@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -11,13 +12,17 @@ import java.util.Map;
 
 @ApplicationScoped
 class OAuthCallbackPage {
+    private static final Logger LOG = Logger.getLogger(OAuthCallbackPage.class);
+
     @Inject ObjectMapper mapper;
 
     String success(Map<String, Object> payload) {
+        LOG.debugf("Rendering Google OAuth success callback payloadKeys=%s", payload == null ? 0 : payload.size());
         return page(encoded(payload));
     }
 
     String error(String message) {
+        LOG.warnf("Rendering Google OAuth error callback message=%s", message);
         return page(encoded(Map.of("error", message)));
     }
 
@@ -25,6 +30,7 @@ class OAuthCallbackPage {
         try {
             return Base64.getEncoder().encodeToString(mapper.writeValueAsBytes(payload));
         } catch (JsonProcessingException e) {
+            LOG.error("Could not render OAuth callback", e);
             throw new IllegalStateException("Could not render OAuth callback", e);
         }
     }

@@ -6,10 +6,13 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import org.jboss.logging.Logger;
+
 import java.util.List;
 
 @RegisterRestClient(configKey = "gmail-mailbox")
 public interface GmailMailboxClient {
+    Logger LOG = Logger.getLogger(GmailMailboxClient.class);
     @GET
     @Path("/gmail/v1/users/me/messages")
     @Produces(MediaType.APPLICATION_JSON)

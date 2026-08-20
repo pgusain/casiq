@@ -19,6 +19,8 @@ import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.ForbiddenException;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.WebApplicationException;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.util.List;
@@ -26,6 +28,7 @@ import java.util.Locale;
 
 @ApplicationScoped
 public class WorkAccountService {
+    private static final Logger LOG = Logger.getLogger(WorkAccountService.class);
     @Inject AuthService auth;
     @Inject WorkItemDefinitionService workItems;
     @Inject WorkItemWorkflowService workflows;
@@ -33,24 +36,42 @@ public class WorkAccountService {
     @Transactional
     public List<WorkAccountView> list(String rawToken, Long requestedTenantId) {
         ApplicationUserEntity actor = administrator(rawToken);
-        List<WorkAccountEntity> accounts;
-        if (actor.role == UserRole.GLOBAL_ADMIN) {
-            accounts = requestedTenantId == null
-                    ? WorkAccountEntity.list("order by tenant.companyCode, emailId")
-                    : WorkAccountEntity.list("tenant.id = ?1 order by emailId", requestedTenantId);
-        } else {
-            assertOwnTenant(actor, requestedTenantId);
-            accounts = WorkAccountEntity.list("tenant.id = ?1 order by emailId", actor.tenant.id);
+        MDC.put("tenantCode", requestedTenantId == null ? (actor.tenant != null ? actor.tenant.normalizedCompanyCode : "global") : String.valueOf(requestedTenantId));
+        try {
+            LOG.debugf("Listing work accounts actorId=%s requestedTenantId=%s", String.valueOf(actor.id), requestedTenantId);
+            List<WorkAccountEntity> accounts;
+            if (actor.role == UserRole.GLOBAL_ADMIN) {
+                accounts = requestedTenantId == null
+                        ? WorkAccountEntity.list("order by tenant.companyCode, emailId")
+                        : WorkAccountEntity.list("tenant.id = ?1 order by emailId", requestedTenantId);
+            } else {
+                assertOwnTenant(actor, requestedTenantId);
+                accounts = WorkAccountEntity.list("tenant.id = ?1 order by emailId", actor.tenant.id);
+            }
+            accounts.forEach(this::initializeReferences);
+            return accounts.stream().map(this::view).toList();
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error listing work accounts actorId=%s requestedTenantId=%s", String.valueOf(actor.id), requestedTenantId, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        accounts.forEach(this::initializeReferences);
-        return accounts.stream().map(this::view).toList();
     }
 
     @Transactional
     public List<EmailProviderView> providers(String rawToken) {
-        administrator(rawToken);
-        return EmailProviderEntity.<EmailProviderEntity>list("active = true order by sortOrder, code").stream()
-                .map(provider -> new EmailProviderView(provider.code, provider.displayName)).toList();
+        ApplicationUserEntity actor = administrator(rawToken);
+        MDC.put("tenantCode", actor.tenant != null ? actor.tenant.normalizedCompanyCode : "global");
+        try {
+            LOG.debugf("Listing email providers actorId=%s", String.valueOf(actor.id));
+            return EmailProviderEntity.<EmailProviderEntity>list("active = true order by sortOrder, code").stream()
+                    .map(provider -> new EmailProviderView(provider.code, provider.displayName)).toList();
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error listing email providers actorId=%s", String.valueOf(actor.id), e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
@@ -58,32 +79,44 @@ public class WorkAccountService {
                                   String providerCode, Long workItemId) {
         ApplicationUserEntity actor = administrator(rawToken);
         TenantEntity tenant = targetTenant(actor, requestedTenantId);
-        String normalizedEmail = normalizeEmail(emailId);
-        ensureUnique(tenant.id, normalizedEmail, null);
-        WorkItemDefinitionEntity workItem = workItems.requireEffective(workItemId, tenant.id);
-        EmailProviderEntity provider = requireProvider(providerCode);
+        MDC.put("tenantCode", String.valueOf(tenant.id));
+        try {
+            LOG.debugf("Creating work account actorId=%s tenantId=%s emailId=%s providerCode=%s workItemId=%s",
+                    String.valueOf(actor.id), tenant.id, emailId, providerCode, workItemId);
+            String normalizedEmail = normalizeEmail(emailId);
+            ensureUnique(tenant.id, normalizedEmail, null);
+            WorkItemDefinitionEntity workItem = workItems.requireEffective(workItemId, tenant.id);
+            EmailProviderEntity provider = requireProvider(providerCode);
 
-        Instant now = Instant.now();
-        WorkAccountEntity account = new WorkAccountEntity();
-        account.tenant = tenant;
-        account.emailId = emailId.trim();
-        account.normalizedEmailId = normalizedEmail;
-        account.workItemDefinition = workItem;
-        account.legacyWorkItemType = workItem.type;
-        account.provider = provider;
-        account.createdAt = now;
-        account.updatedAt = now;
-        Panache.getEntityManager().persist(account);
-        Panache.getEntityManager().flush();
-        EmailPollingConfigEntity polling = new EmailPollingConfigEntity();
-        polling.workAccount = account;
-        polling.emailId = account.emailId;
-        polling.provider = provider;
-        polling.createdAt = now;
-        polling.updatedAt = now;
-        Panache.getEntityManager().persist(polling);
-        workflows.initialize(account.id, account.emailId, tenant, workItem);
-        return WorkAccountView.from(account, polling);
+            Instant now = Instant.now();
+            WorkAccountEntity account = new WorkAccountEntity();
+            account.tenant = tenant;
+            account.emailId = emailId.trim();
+            account.normalizedEmailId = normalizedEmail;
+            account.workItemDefinition = workItem;
+            account.legacyWorkItemType = workItem.type;
+            account.provider = provider;
+            account.createdAt = now;
+            account.updatedAt = now;
+            Panache.getEntityManager().persist(account);
+            Panache.getEntityManager().flush();
+            EmailPollingConfigEntity polling = new EmailPollingConfigEntity();
+            polling.workAccount = account;
+            polling.emailId = account.emailId;
+            polling.provider = provider;
+            polling.createdAt = now;
+            polling.updatedAt = now;
+            Panache.getEntityManager().persist(polling);
+            workflows.initialize(account.id, account.emailId, tenant, workItem);
+            LOG.infof("Created work account accountId=%s tenantId=%s emailId=%s providerCode=%s workItemId=%s actorId=%s",
+                    account.id, tenant.id, account.emailId, provider.code, workItem.id, actor.id);
+            return WorkAccountView.from(account, polling);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error creating work account actorId=%s tenantId=%s emailId=%s", String.valueOf(actor.id), tenant.id, emailId, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
@@ -91,34 +124,55 @@ public class WorkAccountService {
                                   String providerCode, Long workItemId) {
         ApplicationUserEntity actor = administrator(rawToken);
         WorkAccountEntity account = manageable(actor, accountId);
-        String normalizedEmail = normalizeEmail(emailId);
-        ensureUnique(account.tenant.id, normalizedEmail, account.id);
-        WorkItemDefinitionEntity workItem = workItems.requireEffective(workItemId, account.tenant.id);
-        EmailProviderEntity provider = requireProvider(providerCode);
-        EmailPollingConfigEntity polling = polling(account.id);
+        MDC.put("tenantCode", String.valueOf(account.tenant.id));
+        try {
+            LOG.debugf("Updating work account actorId=%s accountId=%s emailId=%s providerCode=%s workItemId=%s",
+                    String.valueOf(actor.id), accountId, emailId, providerCode, workItemId);
+            String normalizedEmail = normalizeEmail(emailId);
+            ensureUnique(account.tenant.id, normalizedEmail, account.id);
+            WorkItemDefinitionEntity workItem = workItems.requireEffective(workItemId, account.tenant.id);
+            EmailProviderEntity provider = requireProvider(providerCode);
+            EmailPollingConfigEntity polling = polling(account.id);
 
-        if (!account.normalizedEmailId.equals(normalizedEmail) || !account.provider.code.equals(provider.code)) {
-            clearConnection(account, polling);
+            if (!account.normalizedEmailId.equals(normalizedEmail) || !account.provider.code.equals(provider.code)) {
+                clearConnection(account, polling);
+            }
+            workflows.changeDefinition(account.id, emailId.trim(), workItem);
+            account.emailId = emailId.trim();
+            account.normalizedEmailId = normalizedEmail;
+            account.provider = provider;
+            account.workItemDefinition = workItem;
+            account.legacyWorkItemType = workItem.type;
+            account.updatedAt = Instant.now();
+            polling.emailId = account.emailId;
+            polling.provider = provider;
+            polling.updatedAt = account.updatedAt;
+            LOG.infof("Updated work account accountId=%s tenantId=%s emailId=%s actorId=%s",
+                    account.id, account.tenant.id, account.emailId, actor.id);
+            return WorkAccountView.from(account, polling);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error updating work account actorId=%s accountId=%s", String.valueOf(actor.id), accountId, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        workflows.changeDefinition(account.id, emailId.trim(), workItem);
-        account.emailId = emailId.trim();
-        account.normalizedEmailId = normalizedEmail;
-        account.provider = provider;
-        account.workItemDefinition = workItem;
-        account.legacyWorkItemType = workItem.type;
-        account.updatedAt = Instant.now();
-        polling.emailId = account.emailId;
-        polling.provider = provider;
-        polling.updatedAt = account.updatedAt;
-        return WorkAccountView.from(account, polling);
     }
 
     @Transactional
     public WorkAccountTarget requireManageable(String rawToken, Long accountId) {
         ApplicationUserEntity actor = administrator(rawToken);
         WorkAccountEntity account = manageable(actor, accountId);
-        if (!account.tenant.active) throw new BadRequestException("Tenant is inactive");
-        return new WorkAccountTarget(account.id, account.emailId, account.provider.code);
+        MDC.put("tenantCode", String.valueOf(account.tenant.id));
+        try {
+            LOG.debugf("Validating manageable work account actorId=%s accountId=%s", String.valueOf(actor.id), accountId);
+            if (!account.tenant.active) throw new BadRequestException("Tenant is inactive");
+            return new WorkAccountTarget(account.id, account.emailId, account.provider.code);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error validating manageable work account actorId=%s accountId=%s", String.valueOf(actor.id), accountId, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @Transactional
@@ -139,34 +193,45 @@ public class WorkAccountService {
             String refreshToken,
             Instant accessTokenExpiresAt) {
         WorkAccountEntity account = WorkAccountEntity.findById(accountId);
-        if (account == null) throw new NotFoundException("Work account not found");
-        account.tenant = TenantEntity.findById(account.tenant.id);
-        account.workItemDefinition = WorkItemDefinitionEntity.findById(account.workItemDefinition.id);
-        account.provider = EmailProviderEntity.findById(account.provider.id);
-        if (!providerCode.equals(account.provider.code)) {
-            throw new BadRequestException("Work account provider is not " + providerCode);
-        }
-        if (!account.normalizedEmailId.equals(normalizeEmail(connectedEmailId))) {
-            throw new BadRequestException(
-                    "The selected " + providerName + " account does not match " + account.emailId);
-        }
-        if ((refreshToken == null || refreshToken.isBlank())
-                && (account.refreshToken == null || account.refreshToken.isBlank())) {
-            throw new BadRequestException(
-                    providerName + " did not return an offline refresh token; reconnect with consent");
-        }
+        MDC.put("tenantCode", account == null ? "unknown" : String.valueOf(account.tenant.id));
+        try {
+            LOG.debugf("Completing email connection accountId=%s providerCode=%s connectedEmailId=%s",
+                    String.valueOf(accountId), providerCode, connectedEmailId);
+            if (account == null) throw new NotFoundException("Work account not found");
+            account.tenant = TenantEntity.findById(account.tenant.id);
+            account.workItemDefinition = WorkItemDefinitionEntity.findById(account.workItemDefinition.id);
+            account.provider = EmailProviderEntity.findById(account.provider.id);
+            if (!providerCode.equals(account.provider.code)) {
+                throw new BadRequestException("Work account provider is not " + providerCode);
+            }
+            if (!account.normalizedEmailId.equals(normalizeEmail(connectedEmailId))) {
+                throw new BadRequestException(
+                        "The selected " + providerName + " account does not match " + account.emailId);
+            }
+            if ((refreshToken == null || refreshToken.isBlank())
+                    && (account.refreshToken == null || account.refreshToken.isBlank())) {
+                throw new BadRequestException(
+                        providerName + " did not return an offline refresh token; reconnect with consent");
+            }
 
-        Instant now = Instant.now();
-        if (refreshToken != null && !refreshToken.isBlank()) account.refreshToken = refreshToken;
-        account.updatedAt = now;
-        EmailPollingConfigEntity polling = polling(account.id);
-        polling.emailId = account.emailId;
-        polling.provider = account.provider;
-        polling.accessToken = accessToken;
-        polling.accessTokenExpiresAt = accessTokenExpiresAt;
-        polling.nextRefreshAt = now;
-        polling.updatedAt = now;
-        return WorkAccountView.from(account, polling);
+            Instant now = Instant.now();
+            if (refreshToken != null && !refreshToken.isBlank()) account.refreshToken = refreshToken;
+            account.updatedAt = now;
+            EmailPollingConfigEntity polling = polling(account.id);
+            polling.emailId = account.emailId;
+            polling.provider = account.provider;
+            polling.accessToken = accessToken;
+            polling.accessTokenExpiresAt = accessTokenExpiresAt;
+            polling.nextRefreshAt = now;
+            polling.updatedAt = now;
+            LOG.infof("Completed email connection accountId=%s tenantId=%s providerCode=%s", account.id, account.tenant.id, providerCode);
+            return WorkAccountView.from(account, polling);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error completing email connection accountId=%s providerCode=%s", String.valueOf(accountId), providerCode, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     private ApplicationUserEntity administrator(String rawToken) {

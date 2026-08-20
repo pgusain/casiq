@@ -14,6 +14,7 @@ import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -29,62 +30,71 @@ public class EmailPollingProcessor {
 
     @Transactional
     public void poll(Long configId, String owner) {
-        LOG.debugf("Processing email polling configuration configId=%s owner=%s", configId, owner);
-        EmailPollingConfigEntity config = EmailPollingConfigEntity.findById(configId);
-        if (config == null || !owner.equals(config.lockOwner)) {
-            LOG.debugf("Email polling configuration skipped because lease is not owned configId=%s owner=%s",
-                    configId, owner);
-            return;
-        }
+        MDC.put("tenantCode", configId == null ? "unknown" : String.valueOf(configId));
+        try {
+            LOG.debugf("Processing email polling configuration configId=%s owner=%s", configId, owner);
+            EmailPollingConfigEntity config = EmailPollingConfigEntity.findById(configId);
+            if (config == null || !owner.equals(config.lockOwner)) {
+                LOG.debugf("Email polling configuration skipped because lease is not owned configId=%s owner=%s",
+                        configId, owner);
+                return;
+            }
 
-        Instant startedAt = Instant.now();
-        if (config.lockedUntil == null || !config.lockedUntil.isAfter(startedAt)) {
-            throw new IllegalStateException("Email polling lease expired before processing");
-        }
+            Instant startedAt = Instant.now();
+            if (config.lockedUntil == null || !config.lockedUntil.isAfter(startedAt)) {
+                throw new IllegalStateException("Email polling lease expired before processing");
+            }
 
-        WorkAccountEntity account = config.workAccount;
-        if (account == null) throw new IllegalStateException("Work account no longer exists");
-        String providerCode = config.provider.code;
-        EmailProviderConnector connector = connectors.stream()
-                .filter(candidate -> providerCode.equals(candidate.providerCode()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "No email polling connector is configured for " + providerCode));
-        LOG.debugf("Dispatching email polling configId=%s workAccountId=%s provider=%s after=%s",
-                configId, account.id, providerCode, config.lastPolledAt);
+            WorkAccountEntity account = config.workAccount;
+            if (account == null) throw new IllegalStateException("Work account no longer exists");
+            MDC.put("tenantCode", String.valueOf(account.tenant.id));
+            String providerCode = config.provider.code;
+            EmailProviderConnector connector = connectors.stream()
+                    .filter(candidate -> providerCode.equals(candidate.providerCode()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "No email polling connector is configured for " + providerCode));
+            LOG.debugf("Dispatching email polling configId=%s workAccountId=%s provider=%s after=%s",
+                    configId, account.id, providerCode, config.lastPolledAt);
 
-        Instant after = config.lastPolledAt == null
-                ? startedAt.minus(initialLookbackHours, ChronoUnit.HOURS)
-                : config.lastPolledAt;
-        EmailProviderConnector.PollResult result = connector.fetch(
-                new EmailProviderConnector.PollRequest(
-                        account.id,
-                        config.emailId,
-                        account.refreshToken,
-                        config.accessToken,
-                        config.accessTokenExpiresAt,
-                        after));
-        if (result == null) {
-            throw new IllegalStateException(providerCode + " connector returned no polling result");
-        }
+            Instant after = config.lastPolledAt == null
+                    ? startedAt.minus(initialLookbackHours, ChronoUnit.HOURS)
+                    : config.lastPolledAt;
+            EmailProviderConnector.PollResult result = connector.fetch(
+                    new EmailProviderConnector.PollRequest(
+                            account.id,
+                            config.emailId,
+                            account.refreshToken,
+                            config.accessToken,
+                            config.accessTokenExpiresAt,
+                            after));
+            if (result == null) {
+                throw new IllegalStateException(providerCode + " connector returned no polling result");
+            }
 
-        int persisted = persistNewMessages(account, result.messages(), startedAt);
-        config.accessToken = result.accessToken();
-        config.accessTokenExpiresAt = result.accessTokenExpiresAt();
-        if (result.refreshToken() != null && !result.refreshToken().isBlank()) {
-            account.refreshToken = result.refreshToken();
+            int persisted = persistNewMessages(account, result.messages(), startedAt);
+            config.accessToken = result.accessToken();
+            config.accessTokenExpiresAt = result.accessTokenExpiresAt();
+            if (result.refreshToken() != null && !result.refreshToken().isBlank()) {
+                account.refreshToken = result.refreshToken();
+            }
+            config.lastPolledAt = startedAt;
+            config.nextRefreshAt = startedAt.plusSeconds(pollIntervalSeconds);
+            config.lockOwner = null;
+            config.lockedUntil = null;
+            config.lastError = null;
+            config.consecutiveFailures = 0;
+            config.updatedAt = Instant.now();
+            LOG.infof("Email polling completed configId=%s workAccountId=%s provider=%s fetched=%d persisted=%d nextPollAt=%s",
+                    configId, account.id, providerCode,
+                    result.messages() == null ? 0 : result.messages().size(),
+                    persisted, config.nextRefreshAt);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error processing email polling configId=%s owner=%s", configId, owner, e);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        config.lastPolledAt = startedAt;
-        config.nextRefreshAt = startedAt.plusSeconds(pollIntervalSeconds);
-        config.lockOwner = null;
-        config.lockedUntil = null;
-        config.lastError = null;
-        config.consecutiveFailures = 0;
-        config.updatedAt = Instant.now();
-        LOG.infof("Email polling completed configId=%s workAccountId=%s provider=%s fetched=%d persisted=%d nextPollAt=%s",
-                configId, account.id, providerCode,
-                result.messages() == null ? 0 : result.messages().size(),
-                persisted, config.nextRefreshAt);
     }
 
     private int persistNewMessages(

@@ -7,11 +7,14 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.List;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 @Path("/api/v1/work-items")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class WorkItemDefinitionResource {
+    private static final Logger LOG = Logger.getLogger(WorkItemDefinitionResource.class);
     @Inject WorkItemDefinitionService workItems;
 
     @GET @Path("/definitions")
@@ -21,7 +24,13 @@ public class WorkItemDefinitionResource {
     @GET @Path("/effective")
     public List<WorkItemDefinitionView> effective(@CookieParam(AuthResource.SESSION_COOKIE) String token,
                                                   @QueryParam("tenantId") Long tenantId) {
-        return workItems.effective(token, tenantId);
+        MDC.put("tenantCode", String.valueOf(tenantId));
+        try {
+            LOG.debugf("Entering effective tenantId=%s", tenantId);
+            return workItems.effective(token, tenantId);
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
     @POST @Path("/definitions")
     public WorkItemDefinitionView create(@CookieParam(AuthResource.SESSION_COOKIE) String token,

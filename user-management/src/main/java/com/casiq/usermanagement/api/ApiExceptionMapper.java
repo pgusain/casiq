@@ -8,6 +8,7 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.ExceptionMapper;
 import jakarta.ws.rs.ext.Provider;
 import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 @Provider
 public class ApiExceptionMapper implements ExceptionMapper<Exception> {
@@ -21,7 +22,11 @@ public class ApiExceptionMapper implements ExceptionMapper<Exception> {
                 : exception instanceof WebApplicationException web
                 ? web.getResponse().getStatus()
                 : exception instanceof ConstraintViolationException ? 400 : 500;
-        if (status == 500) LOG.error("Unhandled user-management API exception", exception);
+        if (status == 500) {
+            String tenant = MDC.get("tenantCode");
+            LOG.errorf("Unhandled user-management API exception tenantCode=%s", tenant);
+            LOG.error("Unhandled user-management API exception", exception);
+        }
         String message = optimisticConflict
                 ? "This work item was updated by another user. Refresh and retry."
                 : status == 500

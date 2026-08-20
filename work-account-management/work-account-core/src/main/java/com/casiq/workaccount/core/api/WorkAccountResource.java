@@ -21,6 +21,8 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.BadRequestException;
+import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 import java.util.List;
 
@@ -28,6 +30,7 @@ import java.util.List;
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class WorkAccountResource {
+    private static final Logger LOG = Logger.getLogger(WorkAccountResource.class);
     @Inject WorkAccountService workAccounts;
     @Inject Instance<EmailProviderAuthorization> authorizations;
 
@@ -35,7 +38,13 @@ public class WorkAccountResource {
     public List<WorkAccountView> list(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @QueryParam("tenantId") Long tenantId) {
-        return workAccounts.list(token, tenantId);
+        MDC.put("tenantCode", String.valueOf(tenantId));
+        try {
+            LOG.debugf("Entering list tenantId=%s", tenantId);
+            return workAccounts.list(token, tenantId);
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @GET
@@ -64,7 +73,13 @@ public class WorkAccountResource {
     public WorkAccountView create(
             @CookieParam(AuthResource.SESSION_COOKIE) String token,
             @Valid @NotNull WorkAccountRequest request) {
-        return workAccounts.create(token, request.tenantId(), request.emailId(), request.provider(), request.workItemId());
+        MDC.put("tenantCode", String.valueOf(request.tenantId()));
+        try {
+            LOG.debugf("Entering create tenantId=%s email=%s", request.tenantId(), request.emailId());
+            return workAccounts.create(token, request.tenantId(), request.emailId(), request.provider(), request.workItemId());
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     @PUT

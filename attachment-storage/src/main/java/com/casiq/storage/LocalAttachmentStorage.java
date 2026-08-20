@@ -4,6 +4,7 @@ import io.quarkus.arc.properties.IfBuildProperty;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -41,39 +42,55 @@ public class LocalAttachmentStorage implements AttachmentStorage {
             String key,
             String contentType,
             byte[] content) {
-        if (key == null || key.isBlank() || key.startsWith("/")
-                || key.contains("..") || key.contains("\\")) {
-            throw new IllegalArgumentException("Invalid local attachment key");
-        }
-        if (content == null) throw new IllegalArgumentException("Attachment content is required");
-        String storedKey = tenantId + "/" + key;
-        Path target = resolve(tenantId, storedKey);
+        MDC.put("tenantCode", String.valueOf(tenantId));
         try {
-            Files.createDirectories(target.getParent());
-            Path temporary = Files.createTempFile(target.getParent(), ".upload-", ".tmp");
-            try {
-                Files.write(temporary, content);
-                Files.move(temporary, target,
-                        StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } finally {
-                Files.deleteIfExists(temporary);
+            if (key == null || key.isBlank() || key.startsWith("/")
+                    || key.contains("..") || key.contains("\\")) {
+                throw new IllegalArgumentException("Invalid local attachment key");
             }
-        } catch (IOException failure) {
-            throw new IllegalStateException("Unable to store attachment on local disk", failure);
+            if (content == null) throw new IllegalArgumentException("Attachment content is required");
+            String storedKey = tenantId + "/" + key;
+            Path target = resolve(tenantId, storedKey);
+            try {
+                Files.createDirectories(target.getParent());
+                Path temporary = Files.createTempFile(target.getParent(), ".upload-", ".tmp");
+                try {
+                    Files.write(temporary, content);
+                    Files.move(temporary, target,
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } finally {
+                    Files.deleteIfExists(temporary);
+                }
+            } catch (IOException failure) {
+                throw new IllegalStateException("Unable to store attachment on local disk", failure);
+            }
+            LOG.debugf("Stored local attachment tenantId=%s key=%s size=%d",
+                    (Object) tenantId, storedKey, content.length);
+            return new StoredObject("LOCAL", storedKey, content.length);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error storing local attachment tenantId=%s key=%s", tenantId, key);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        LOG.debugf("Stored local attachment tenantId=%s key=%s size=%d",
-                (Object) tenantId, storedKey, content.length);
-        return new StoredObject("LOCAL", storedKey, content.length);
     }
 
     @Override
     public byte[] get(Long tenantId, String key) {
-        Path target = resolve(tenantId, key);
+        MDC.put("tenantCode", String.valueOf(tenantId));
         try {
-            return Files.readAllBytes(target);
-        } catch (IOException failure) {
-            throw new IllegalStateException("Unable to read attachment from local disk", failure);
+            Path target = resolve(tenantId, key);
+            try {
+                return Files.readAllBytes(target);
+            } catch (IOException failure) {
+                throw new IllegalStateException("Unable to read attachment from local disk", failure);
+            }
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error reading local attachment tenantId=%s key=%s", tenantId, key);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
     }
 

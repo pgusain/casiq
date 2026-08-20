@@ -5,6 +5,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import org.slf4j.MDC;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -43,28 +44,44 @@ public class S3AttachmentStorage implements AttachmentStorage {
             String key,
             String contentType,
             byte[] content) {
-        validateKey(key);
-        if (content == null) throw new IllegalArgumentException("Attachment content is required");
-        PutObjectRequest.Builder request = PutObjectRequest.builder()
-                .bucket(bucket(tenantId))
-                .key(key);
-        if (contentType != null && !contentType.isBlank()) {
-            request.contentType(contentType);
+        MDC.put("tenantCode", String.valueOf(tenantId));
+        try {
+            validateKey(key);
+            if (content == null) throw new IllegalArgumentException("Attachment content is required");
+            PutObjectRequest.Builder request = PutObjectRequest.builder()
+                    .bucket(bucket(tenantId))
+                    .key(key);
+            if (contentType != null && !contentType.isBlank()) {
+                request.contentType(contentType);
+            }
+            s3.putObject(request.build(), RequestBody.fromBytes(content));
+            LOG.debugf("Stored S3 attachment tenantId=%s bucket=%s key=%s size=%d",
+                    tenantId, bucket(tenantId), key, content.length);
+            return new StoredObject("S3", key, content.length);
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error storing S3 attachment tenantId=%s key=%s", tenantId, key);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
         }
-        s3.putObject(request.build(), RequestBody.fromBytes(content));
-        LOG.debugf("Stored S3 attachment tenantId=%s bucket=%s key=%s size=%d",
-                tenantId, bucket(tenantId), key, content.length);
-        return new StoredObject("S3", key, content.length);
     }
 
     @Override
     public byte[] get(Long tenantId, String key) {
-        validateKey(key);
-        return s3.getObjectAsBytes(GetObjectRequest.builder()
-                        .bucket(bucket(tenantId))
-                        .key(key)
-                        .build())
-                .asByteArray();
+        MDC.put("tenantCode", String.valueOf(tenantId));
+        try {
+            validateKey(key);
+            return s3.getObjectAsBytes(GetObjectRequest.builder()
+                            .bucket(bucket(tenantId))
+                            .key(key)
+                            .build())
+                    .asByteArray();
+        } catch (RuntimeException | Error e) {
+            LOG.errorf("Error reading S3 attachment tenantId=%s key=%s", tenantId, key);
+            throw e;
+        } finally {
+            MDC.remove("tenantCode");
+        }
     }
 
     private static void validateKey(String key) {

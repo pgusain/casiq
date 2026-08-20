@@ -20,6 +20,7 @@ CONTAINER_NAME="${CONTAINER_NAME:-casiq-app}"
 APP_PORT="${APP_PORT:-8080}"
 APP_BIND_ADDRESS="${APP_BIND_ADDRESS:-127.0.0.1}"
 ATTACHMENT_DATA_DIR="${ATTACHMENT_DATA_DIR:-/opt/casiq/data/attachments}"
+LOG_DIR="${LOG_DIR:-/opt/casiq/logs}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 COMPOSE_FILE="${COMPOSE_FILE:-/opt/casiq/compose.yaml}"
 SSM_DB_PASSWORD_PARAMETER="${SSM_DB_PASSWORD_PARAMETER:-/casiq/${ENVIRONMENT}/database/password}"
@@ -217,6 +218,7 @@ ensure_directories() {
     log "Ensuring CASIQ application directories exist."
     as_root mkdir -p /opt/casiq/config
     as_root mkdir -p "$ATTACHMENT_DATA_DIR"
+    as_root mkdir -p "$LOG_DIR"
 
     DEPLOY_USER="${SUDO_USER:-${USER:-}}"
     if [ -n "$DEPLOY_USER" ] && [ "$DEPLOY_USER" != "root" ]; then
